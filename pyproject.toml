@@ -1,0 +1,32 @@
+[project]
+name = "open-llm-vtuber"
+version = "1.2.1"
+description = "Open-LLM-VTuber simplified version — DeepSeek + Qwen TTS + Sherpa-ONNX ASR"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "aiohttp>=3.10.0",
+    "chardet>=5.2.0",
+    "duckduckgo-mcp-server>=0.1.1",
+    "fastapi[standard]>=0.115.8",
+    "httpx>=0.28.1",
+    "langdetect>=1.0.9",
+    "loguru>=0.7.2",
+    "mcp[cli]>=1.6.0",
+    "numpy>=1.26.4,<2",
+    "onnxruntime>=1.20.1,<1.28",
+    "openai>=1.57.4",
+    "pysbd>=0.3.4",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.3",
+    "ruamel-yaml>=0.18.10",
+    "sherpa-onnx>=1.10.39",
+    "soundfile>=0.12.1",
+    "uvicorn[standard]>=0.33.0",
+    "websocket-client>=1.8.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+per-file-ignores = {}

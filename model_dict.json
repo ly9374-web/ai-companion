@@ -1,0 +1,38 @@
+[
+    {
+        "name": "mao_pro",
+        "description": "",
+        "url": "/live2d-models/mao_pro/runtime/mao_pro.model3.json",
+        "kScale": 1.8,
+        "initialXshift": 0,
+        "initialYshift": 160,
+        "scrollToResize": false,
+        "kXOffset": 1150,
+        "idleMotionGroupName": "Idle",
+        "emotionMap": {
+            "clears throat": 0,
+            "cough": 0,
+            "sighing": 1,
+            "snorts": 2,
+            "gasp": 3,
+            "giggles": 3,
+            "laughing": 3,
+            "frown": 4,
+            "sigh": 4,
+            "blush": 5,
+            "shy": 5,
+            "shocked": 6,
+            "worried": 6,
+            "pout": 7,
+            "angry": 7
+        },
+        "tapMotions": {
+            "HitAreaHead": {
+                "": 1
+            },
+            "HitAreaBody": {
+                "": 1
+            }
+        }
+    }
+]
