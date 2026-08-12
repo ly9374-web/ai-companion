@@ -11,7 +11,7 @@
         "idleMotionGroupName": "Idle",
         "emotionMap": {
             "gasp": 6,
-            "sighing": 7,
+            "sighing": 1,
             "clears throat": 2,
             "giggles": 2,
             "laughing": 3,

@@ -86,7 +86,7 @@ class BatchInput(BaseInput):
             - 'proactive_speak': Boolean flag indicating if this is a proactive speak input
             - 'skip_memory': Boolean flag indicating if this input should be skipped in AI's internal memory
             - 'skip_history': Boolean flag indicating if this input should be skipped in local history storage
-            - 'long_term_memory_context': Hidden long-term memory snapshot
+            - 'long_term_memory_context': Request-scoped RAG memory content
             - 'long_term_relationship_context': Hidden long relationship snapshot
             - 'short_term_relationship_context': Hidden short relationship snapshot
             - 'tts_preference_change_context': One-turn notice for user-initiated TTS changes

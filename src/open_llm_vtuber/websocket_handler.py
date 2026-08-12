@@ -40,6 +40,9 @@ class WSMessage(TypedDict, total=False):
     browser_time: Optional[str]
     enabled: Optional[bool]
     max_history_turns: Optional[int]
+    top_k: Optional[int]
+    threshold: Optional[float]
+    hybrid_weight: Optional[float]
 
 
 class WebSocketHandler:
@@ -74,6 +77,7 @@ class WebSocketHandler:
             "set-qwen-tts-options": self._handle_set_qwen_tts_options,
             "set-generate-audio": self._handle_set_generate_audio,
             "set-max-history-turns": self._handle_set_max_history_turns,
+            "set-rag-options": self._handle_set_rag_options,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
             "heartbeat": self._handle_heartbeat,
@@ -544,6 +548,32 @@ class WebSocketHandler:
                     "model_info": context.live2d_model.model_info,
                     "conf_name": context.character_config.conf_name,
                     "conf_uid": context.character_config.conf_uid,
+                }
+            )
+        )
+
+    async def _handle_set_rag_options(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        context = self.client_contexts[client_uid]
+        try:
+            context.set_rag_options(
+                top_k=data.get("top_k", 5),
+                threshold=data.get("threshold", 0.5),
+                hybrid_weight=data.get("hybrid_weight", 0.5),
+            )
+        except (TypeError, ValueError) as exc:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": f"Invalid RAG settings: {exc}"})
+            )
+            return
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "rag-options-updated",
+                    "top_k": context.rag_top_k,
+                    "threshold": context.rag_threshold,
+                    "hybrid_weight": context.rag_hybrid_weight,
                 }
             )
         )

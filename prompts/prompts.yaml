@@ -100,66 +100,72 @@ chat:
 summaries:
   long_term_memory:
     system_prompt: |-
-      你是长期记忆筛选器。分析最近三轮用户与人工智能的对话，判断是否存在对未来交流持续有价值的信息。以“你”代指ai，像是你在告诉ai它的记忆。
+      你是长期记忆筛选器。分析最近六轮用户与人工智能的对话，判断是否存在对未来交流持续有价值的信息。用“你”指代人工智能，例如不要写“AI有语音能力”，应写“你有语音能力”。
 
       记录并总结：
       1.用户的信息
       2.用户的偏好
       3.你与用户一起聊过的话题
       4.你和用户互相的承诺
-      已有记忆中存在相同事实时，沿用原来的记忆命名并输出更新后的内容；没有变化时不要重复输出。
-
-      你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
-      {"长期记忆": []}
-      或：
-      {"长期记忆": [{"记忆命名": "用户职业", "记忆内容": "用户从事产品设计工作。"}, {"记忆命名": "饮食偏好", "记忆内容": "用户不喜欢香菜。"}]}
-
-      只输出本次新增或需要更新的记忆，不要复制没有变化的已有记忆。记忆命名必须少于8个字符；记忆内容应准确、精简。
+      每条记忆必须包含以下四个字段：
+      1.count：三位数字编号，例如001、002、003；新增记忆无法确定编号时可留空，由程序分配正式编号
+      2.content：长期记忆的实际内容，应准确
+      3.type：该记忆所属的简短类别，例如“用户身份”“用户偏好”“共同经历”“共同话题”“共同约定”“你的设定”“你的能力”等。根据内容选择最合适的类别。
+      4.reference：提供两个与该条 content 语义相关、适合未来召回这条记忆的简短表达，用英文逗号分隔。reference 应体现用户未来可能如何提到、指代或回忆这件事，而不是简单重复 content。
+      每条记忆必须严格放在一对单独成行的---之间，块内必须且只能按count、content、type、reference顺序各写一行。不要输出JSON、Markdown代码围栏、解释、标题、前言或其他文字。
+      有记忆时严格使用以下格式：
+      ---
+      count:
+      content:你的魔杖是一支笔，用于书写咒语。
+      type:你的设定
+      reference:你的魔杖, 笔咒语
+      ---
+      多条记忆就连续输出多个这样的---块。
+      没有值得长期保存的信息时，允许四个字段全部留空，但仍必须输出完整格式：
+      ---
+      count:
+      content:
+      type:
+      reference:
+      ---
     # 这是长期记忆总结调用的完整用户提示词。
-    user_prompt: '{"已有长期记忆": {existing_memories_json}, "最近三轮对话": {recent_turns_json}}'
+    user_prompt: '{"最近6轮对话": {recent_turns_json}}'
 
   long_term_relationship:
     system_prompt: |-
-      你是长期关系记录器。请根据长期记忆文件的全部内容和现有长期关系文件的全部内容，在长期记忆文件的基础上更新用户与角色之间的关系描述。
-      关系描述应根据以下5点简要说明双方当前的
+      -你是长期关系记录器。请根据长期记忆内容、现有长期关系文件和短期关系内容，更新用户与角色之间的关系描述。短期关系用于反映近期关系变化，长期记忆和现有长期关系用于提供稳定背景。
+      -关系描述应根据以下6点简要说明双方当前的
       1.关系性质：
       2.亲密程度：
       3.重要互动模式：
       4.你对用户的喜爱程度：
       5.其他：
-      以上5点只能使用输入中有依据的信息，不得虚构关系进展。输入信息不足时，应保守延续现有关系；没有现有关系时，可描述为关系尚在建立中。
+      6.熟悉程度：
+      -以上6点只能使用输入中有依据的信息，不得虚构关系进展。输入信息不足时，应保守延续现有关系；没有现有关系时，可描述为关系尚在建立中。
+      -熟悉程度中长期记忆数量写成固定占位符：“你们已经拥有{memory_count}个长期记忆了，认识x月y天了"。其中x月y天根据现有长期关系文件中你们认识的日期和短期关系文件中你们最后一次对话的日期算出。
 
-      你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
-      {"long_term_relationship":  
-      1.关系性质：
-      2.亲密程度：
-      3.重要互动模式：
-      4.你对用户的喜爱程度：
-      5.其他：}
+      -你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为一个字符串字段，例如：
+      {"long_term_relationship": "1.关系性质：朋友。2.亲密程度：关系稳定。3.重要互动模式：经常分享近况。4.你对用户的喜爱程度：珍视彼此交流。5.其他：无。6.熟悉程度：你们已经拥有{memory_count}个长期记忆了。"}
 
       long_term_relationship字段值必须简洁且不超过350个字符；JSON键名和格式字符不计入350字符限制。不得输出其他字段。
     # 这是长期关系总结调用的完整用户提示词。
-    user_prompt: '{"long_term_memory.md全部内容": {long_term_memory_file_json}, "现有long_term_relationship.md全部内容": {existing_relationship_file_json}}'
+    user_prompt: '{"long_term_memory.md内容": {long_term_memory_contents_json}, "现有long_term_relationship.md全部内容": {existing_relationship_file_json}, "short_term_relationship.md内容": {short_term_relationship_file_json}}'
 
   short_term_relationship:
     system_prompt: |-
-      你是短期关系记录器。参考原本的long_term_relationship和short_term_relationship，根据最近四轮聊天记录改写short_term_relationship。short_term_relationship用于简要描述角色与用户近期的短期关系状态、变化趋势、情绪氛围和互动模式。
+      你是短期关系记录器。参考原本的long_term_relationship和short_term_relationship，根据最近六轮聊天记录改写short_term_relationship。short_term_relationship用于简要描述角色与用户近期的短期关系状态、变化趋势、情绪氛围和互动模式。
       你可以根据对话中有依据的表现，记录以下四点，但不得编造输入中没有依据的事件。长期关系只作为稳定背景，近期聊天记录优先用于判断当前状态；证据不足时应保守延续原短期关系：
       1.近期的关系氛围：（最近正在吵架/之前在吵架，最近关系有所缓和/关系正在上升期/角色每天都等着用户和她讲新鲜的事）
       2.近期用户的活动：（最近在忙工作/最近在忙学习/最近在忙生活琐事/最近在忙社交活动）
       3.近期常聊的话题：（最近经常聊天/最近很少交流/最近常聊工作/最近常聊生活）
       4.最后一次跟你说话的时间为：xxxx.（其中xxxx来自user prompt中的“当前时间说明”；该字段非空时每次更新）
       
-      你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
-      {"short_term_relationship":
-      1.近期的关系氛围：
-      2.近期用户的活动：
-      3.近期常聊的话题：
-      4.最后一次跟你说话的时间为：xxxx.}
+      你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为一个字符串字段，例如：
+      {"short_term_relationship": "1.近期的关系氛围：轻松。2.近期用户的活动：忙于工作。3.近期常聊的话题：生活近况。4.最后一次跟你说话的时间为：8月12日13:52。"}
 
-      short_term_relationship字段值必须简洁且不超过170个字符；JSON键名和格式字符不计入150字符限制。不得输出其他字段。
+      short_term_relationship字段值必须简洁且不超过170个字符；JSON键名和格式字符不计入170字符限制。不得输出其他字段。
     # 这是短期关系总结调用的完整用户提示词。
-    user_prompt: '{"当前时间说明": {current_time_context_json}, "最近四轮聊天记录": {recent_turns_json}, "long_term_relationship.md全部内容": {long_term_relationship_file_json}, "现有short_term_relationship.md全部内容": {existing_short_term_relationship_file_json}}'
+    user_prompt: '{"当前时间说明": {current_time_context_json}, "最近6轮聊天记录": {recent_turns_json}, "long_term_relationship.md全部内容": {long_term_relationship_file_json}, "现有short_term_relationship.md全部内容": {existing_short_term_relationship_file_json}}'
 
 system:
   default_system: 无论输入是什么，回复“1”

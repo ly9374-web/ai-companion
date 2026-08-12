@@ -18,15 +18,19 @@ from .chat_history_manager import (
     get_metadata,
     update_metadate,
 )
+from .long_term_memory_manager import LongTermMemory, LongTermMemoryManager
 
 
-UPDATE_INTERVAL = 4
+UPDATE_INTERVAL = 6
 INJECTION_INTERVAL = 5
-MAX_RELATIONSHIP_CHARACTERS = 200
+EARLIEST_MEMORY_LIMIT = 20
+LATEST_MEMORY_LIMIT = 130
 LONG_TERM_RELATIONSHIP_METADATA_KEY = "long_term_relationship"
 
 
-RelationshipSummaryCallback = Callable[[str, str], Awaitable[str]]
+RelationshipSummaryCallback = Callable[
+    [list[str], str, str], Awaitable[str]
+]
 
 
 class LongTermRelationshipManager:
@@ -39,15 +43,11 @@ class LongTermRelationshipManager:
         history_root: str | Path = "chat_history",
         update_interval: int = UPDATE_INTERVAL,
         injection_interval: int = INJECTION_INTERVAL,
-        max_characters: int = MAX_RELATIONSHIP_CHARACTERS,
     ) -> None:
         if update_interval < 1:
             raise ValueError("update_interval must be at least 1")
         if injection_interval < 1:
             raise ValueError("injection_interval must be at least 1")
-        if max_characters < 1:
-            raise ValueError("max_characters must be at least 1")
-
         self.relationship_path = (
             Path(relationship_path) if relationship_path is not None else None
         )
@@ -55,7 +55,10 @@ class LongTermRelationshipManager:
         self.history_root = Path(history_root)
         self.update_interval = update_interval
         self.injection_interval = injection_interval
-        self.max_characters = max_characters
+        self._memory_manager = LongTermMemoryManager(
+            memory_path=self.memory_path,
+            history_root=self.history_root,
+        )
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._relationship_locks: dict[str, asyncio.Lock] = {}
 
@@ -79,6 +82,11 @@ class LongTermRelationshipManager:
             return self.memory_path
         return get_character_history_dir(conf_uid, self.history_root) / (
             "long_term_memory.md"
+        )
+
+    def _get_short_term_relationship_path(self, conf_uid: str) -> Path:
+        return get_character_history_dir(conf_uid, self.history_root) / (
+            "short_term_relationship.md"
         )
 
     def _get_relationship_lock(self, conf_uid: str) -> asyncio.Lock:
@@ -136,10 +144,6 @@ class LongTermRelationshipManager:
         relationship = self._normalize_text(raw_relationship)
         if not relationship:
             raise ValueError("long_term_relationship cannot be empty")
-        if len(relationship) > self.max_characters:
-            raise ValueError(
-                f"long_term_relationship must not exceed {self.max_characters} characters"
-            )
         return relationship
 
     @staticmethod
@@ -196,6 +200,51 @@ class LongTermRelationshipManager:
         finally:
             if temp_path and os.path.exists(temp_path):
                 os.unlink(temp_path)
+
+    @staticmethod
+    def _select_memory_contents(
+        memories: list[LongTermMemory],
+    ) -> tuple[list[str], int]:
+        """Return only content, limiting large histories by their numeric order."""
+        ordered = sorted(memories, key=lambda memory: memory.count)
+        max_count = max((memory.count for memory in ordered), default=0)
+        if max_count > EARLIEST_MEMORY_LIMIT + LATEST_MEMORY_LIMIT:
+            selected = ordered[:EARLIEST_MEMORY_LIMIT]
+            selected_counts = {memory.count for memory in selected}
+            selected.extend(
+                memory
+                for memory in ordered[-LATEST_MEMORY_LIMIT:]
+                if memory.count not in selected_counts
+            )
+        else:
+            selected = ordered
+        return [memory.content for memory in selected], max_count
+
+    def _apply_memory_count(self, relationship: str, max_count: int) -> str:
+        """Insert the real maximum count without exposing it to the model."""
+        expected = f"你们已经拥有{max_count}个长期记忆了"
+        relationship = relationship.replace(
+            "你们已经拥有{memory_count}个长期记忆了",
+            expected,
+        )
+        count_pattern = re.compile(
+            r"你们已经(?:用有|拥有)\s*(?:x|\d+)\s*个长期记忆了?",
+            flags=re.IGNORECASE,
+        )
+        if count_pattern.search(relationship):
+            relationship = count_pattern.sub(expected, relationship, count=1)
+        elif expected not in relationship:
+            familiarity_pattern = re.compile(r"(6\.熟悉程度\s*[：:])")
+            if familiarity_pattern.search(relationship):
+                relationship = familiarity_pattern.sub(
+                    rf"\1{expected}，",
+                    relationship,
+                    count=1,
+                )
+            else:
+                relationship = f"{relationship} 6.熟悉程度：{expected}。"
+        relationship = self._normalize_text(relationship)
+        return relationship
 
     async def read_relationship_file(self, conf_uid: str = "") -> str:
         """Return all relationship-file content, or an empty string if absent."""
@@ -262,19 +311,32 @@ class LongTermRelationshipManager:
         self,
         conf_uid: str,
         history_uid: str,
+        user_content: str,
+        assistant_content: str,
         summarize: RelationshipSummaryCallback,
     ) -> bool:
-        """Count a turn and periodically update this character's file."""
+        """Count turns and update the relationship after every six."""
         if not conf_uid or not history_uid:
+            return False
+
+        if not self._normalize_text(user_content) or not self._normalize_text(
+            assistant_content
+        ):
             return False
 
         async with self._get_history_lock(conf_uid, history_uid):
             state = self._get_state(conf_uid, history_uid)
-            pending_turns = state.get("pending_update_turns", 0)
-            if isinstance(pending_turns, bool) or not isinstance(pending_turns, int):
-                pending_turns = 0
-            pending_turns += 1
+            pending_turns = state.get("pending_update_turns")
+            if isinstance(pending_turns, bool) or not isinstance(
+                pending_turns, int
+            ):
+                legacy_turns = state.get("pending_turns", [])
+                pending_turns = (
+                    len(legacy_turns) if isinstance(legacy_turns, list) else 0
+                )
+            pending_turns = (pending_turns % self.update_interval) + 1
             state["pending_update_turns"] = pending_turns
+            state.pop("pending_turns", None)
             state.setdefault("user_prompt_count", 0)
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
@@ -287,17 +349,40 @@ class LongTermRelationshipManager:
                 return False
 
             relationship_path = self._get_relationship_path(conf_uid)
-            memory_path = self._get_memory_path(conf_uid)
+            short_term_relationship_path = (
+                self._get_short_term_relationship_path(conf_uid)
+            )
+            memories = await self._memory_manager.read_memories(conf_uid)
+            memory_contents, max_count = self._select_memory_contents(memories)
+            logger.info(
+                "Long-term relationship memory input: total={} selected={} "
+                "max_count={} content_only=true",
+                len(memories),
+                len(memory_contents),
+                max_count,
+            )
             async with self._get_relationship_lock(conf_uid):
-                memory_file = self._read_text(memory_path)
                 relationship_file = self._read_text(relationship_path)
+                short_term_relationship_file = self._read_text(
+                    short_term_relationship_path
+                )
                 try:
-                    raw_output = await summarize(memory_file, relationship_file)
+                    raw_output = await summarize(
+                        memory_contents,
+                        relationship_file,
+                        short_term_relationship_file,
+                    )
                     relationship = self.parse_summary(raw_output)
+                    relationship = self._apply_memory_count(
+                        relationship,
+                        max_count,
+                    )
                     self._write_relationship_unlocked(
                         relationship_path, relationship
                     )
                 except Exception as exc:
+                    state["pending_update_turns"] = 0
+                    self._save_state(conf_uid, history_uid, state)
                     logger.error(
                         "Long-term relationship update failed for history {}: {}",
                         history_uid,
@@ -305,18 +390,7 @@ class LongTermRelationshipManager:
                     )
                     return False
 
-            relationship_output = json.dumps(
-                {"long_term_relationship": relationship},
-                ensure_ascii=False,
-                indent=2,
-            )
-            logger.info(
-                "Long-term relationship output for history {}:\n{}",
-                history_uid,
-                relationship_output,
-            )
-
-            state["pending_update_turns"] = pending_turns - self.update_interval
+            state["pending_update_turns"] = 0
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
                     "Relationship was saved but its history checkpoint failed for {}",

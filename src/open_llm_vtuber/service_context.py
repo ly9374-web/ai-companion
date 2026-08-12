@@ -72,6 +72,9 @@ class ServiceContext:
         # existing clients retain the original conversation workflow.
         self.generate_audio: bool = True
         self.max_history_turns: int = 8
+        self.rag_top_k: int = 5
+        self.rag_threshold: float = 0.5
+        self.rag_hybrid_weight: float = 0.5
         self._ai_known_tts_preferences: tuple[str, str] | None = None
         self._tts_preference_change_pending: bool = False
 
@@ -336,6 +339,21 @@ class ServiceContext:
     def set_tts_voice(self, voice: str) -> None:
         """Set the Qwen TTS voice for this client context only."""
         self.set_qwen_tts_options(voice=voice, notify_ai=True)
+
+    def set_rag_options(
+        self,
+        *,
+        top_k: int,
+        threshold: float,
+        hybrid_weight: float,
+    ) -> None:
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise ValueError("top_k must be an integer")
+        if not 1 <= top_k <= 20:
+            raise ValueError("top_k must be between 1 and 20")
+        self.rag_top_k = top_k
+        self.rag_threshold = max(0.0, min(1.0, float(threshold)))
+        self.rag_hybrid_weight = max(0.0, min(1.0, float(hybrid_weight)))
 
     def set_qwen_tts_options(
         self,

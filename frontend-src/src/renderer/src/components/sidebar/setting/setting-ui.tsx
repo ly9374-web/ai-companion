@@ -21,7 +21,7 @@ import Live2D from './live2d';
 import ASR from './asr';
 import TTS from './tts';
 import Agent from './agent';
-import About from './about';
+import Rag from './rag';
 
 interface SettingUIProps {
   open: boolean;
@@ -89,8 +89,8 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
             onCancel={handleCancelCallback}
           />
         </Tabs.Content>
-        <Tabs.Content value="about" {...settingStyles.settingUI.tabs.content}>
-          <About />
+        <Tabs.Content value="rag" {...settingStyles.settingUI.tabs.content}>
+          <Rag onSave={handleSaveCallback} onCancel={handleCancelCallback} />
         </Tabs.Content>
       </Tabs.ContentGroup>
     ),
@@ -155,10 +155,10 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
                 {t('settings.tabs.agent')}
               </Tabs.Trigger>
               <Tabs.Trigger
-                value="about"
+                value="rag"
                 {...settingStyles.settingUI.tabs.trigger}
               >
-                {t('settings.tabs.about')}
+                {t('settings.tabs.rag')}
               </Tabs.Trigger>
             </Tabs.List>
 

@@ -100,8 +100,8 @@ def build_clipboard_content(content: str) -> str:
     ).strip()
 
 
-def build_memory_injection(memories: Iterable[tuple[str, str]]) -> str:
-    memory_lines = "\n".join(f"- {name}：{content}" for name, content in memories)
+def build_memory_injection(memories: Iterable[str]) -> str:
+    memory_lines = "\n".join(f"- {content}" for content in memories if content)
     return prompt_loader.render_prompt(
         "chat.contexts.long_term_memory",
         memories=memory_lines,
@@ -123,27 +123,29 @@ def build_short_relationship_injection(relationship_file: str) -> str:
 
 
 def build_long_term_memory_summary_input(
-    existing_memories: list[dict[str, str]],
     recent_turns: list[dict[str, str]],
 ) -> str:
     return prompt_loader.render_prompt(
         "summaries.long_term_memory.user_prompt",
-        existing_memories_json=json.dumps(existing_memories, ensure_ascii=False),
         recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
     ).strip()
 
 
 def build_long_term_relationship_summary_input(
-    long_term_memory_file: str,
+    long_term_memory_contents: list[str],
     existing_relationship_file: str,
+    short_term_relationship_file: str,
 ) -> str:
     return prompt_loader.render_prompt(
         "summaries.long_term_relationship.user_prompt",
-        long_term_memory_file_json=json.dumps(
-            long_term_memory_file, ensure_ascii=False
+        long_term_memory_contents_json=json.dumps(
+            long_term_memory_contents, ensure_ascii=False
         ),
         existing_relationship_file_json=json.dumps(
             existing_relationship_file, ensure_ascii=False
+        ),
+        short_term_relationship_file_json=json.dumps(
+            short_term_relationship_file, ensure_ascii=False
         ),
     ).strip()
 

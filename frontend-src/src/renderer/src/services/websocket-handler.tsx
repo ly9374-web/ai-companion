@@ -21,6 +21,7 @@ import { useLocalStorage } from '@/hooks/utils/use-local-storage';
 import { useBrowser } from '@/context/browser-context';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
+import { getStoredRagSettings } from '@/constants/rag-settings';
 
 function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
@@ -150,10 +151,20 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           type: 'set-max-history-turns',
           max_history_turns: getStoredMaxHistoryTurns(),
         });
+        {
+          const ragSettings = getStoredRagSettings();
+          wsService.sendMessage({
+            type: 'set-rag-options',
+            top_k: ragSettings.topK,
+            threshold: ragSettings.threshold,
+            hybrid_weight: ragSettings.hybridWeight,
+          });
+        }
         break;
       case 'tts-voice-updated':
       case 'qwen-tts-options-updated':
       case 'max-history-turns-updated':
+      case 'rag-options-updated':
         break;
       case 'background-files':
         if (message.files) {

@@ -15,7 +15,6 @@ from ..output_types import SentenceOutput, DisplayText
 from ..stateless_llm.stateless_llm_interface import StatelessLLMInterface
 from ..stateless_llm.openai_compatible_llm import AsyncLLM as OpenAICompatibleAsyncLLM
 from ...chat_history_manager import get_history
-from ...long_term_memory_manager import LongTermMemory
 from ..transformers import (
     sentence_divider,
     actions_extractor,
@@ -36,7 +35,6 @@ class BasicMemoryAgent(AgentInterface):
 
     _system: str = prompt_builder.load_system_prompt("default_system")
     _CONTEXT_INJECTION_KEYS = (
-        "long_term_memory_context",
         "long_term_relationship_context",
         "short_term_relationship_context",
     )
@@ -403,8 +401,9 @@ class BasicMemoryAgent(AgentInterface):
                 "tts_preference_change_context", ""
             )
 
+        # RAG memory is request-scoped. Relationship snapshots retain their
+        # existing history behavior, while retrieved memory never enters it.
         context_injections = {
-            "long_term_memory_context": long_term_memory_context,
             "long_term_relationship_context": long_term_relationship_context,
             "short_term_relationship_context": short_term_relationship_context,
         }
@@ -479,16 +478,11 @@ class BasicMemoryAgent(AgentInterface):
     async def summarize_long_term_memory(
         self,
         turns: List[Dict[str, str]],
-        existing_memories: List[LongTermMemory],
     ) -> str:
         """Use the configured DeepSeek model for one memory-analysis request."""
         system_prompt = prompt_builder.load_summary_prompt("long_term_memory")
 
         summary_input = prompt_builder.build_long_term_memory_summary_input(
-            existing_memories=[
-                {"记忆命名": memory.name, "记忆内容": memory.content}
-                for memory in existing_memories
-            ],
             recent_turns=turns,
         )
         messages = [
@@ -498,22 +492,26 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info(
-            "Requesting one DeepSeek long-term memory summary for {} turns",
-            len(turns),
-        )
+        logger.info("Long-term memory system prompt:\n{}", system_prompt)
+        logger.info("Long-term memory user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
                 chunks.append(event)
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
-        return "".join(chunks).strip()
+        raw_output = "".join(chunks).strip()
+        logger.info(
+            "Long-term memory raw model output:\n{}",
+            raw_output or "[empty output]",
+        )
+        return raw_output
 
     async def summarize_long_term_relationship(
         self,
-        long_term_memory_file: str,
+        long_term_memory_contents: List[str],
         existing_relationship_file: str,
+        short_term_relationship_file: str,
     ) -> str:
         """Use DeepSeek Pro to rewrite the current character's relationship JSON."""
         system_prompt = prompt_builder.load_summary_prompt(
@@ -521,8 +519,9 @@ class BasicMemoryAgent(AgentInterface):
         )
 
         summary_input = prompt_builder.build_long_term_relationship_summary_input(
-            long_term_memory_file,
+            long_term_memory_contents,
             existing_relationship_file,
+            short_term_relationship_file,
         )
         messages = [
             {
@@ -531,14 +530,20 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info("Requesting one DeepSeek long-term relationship summary")
+        logger.info("Long-term relationship system prompt:\n{}", system_prompt)
+        logger.info("Long-term relationship user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
                 chunks.append(event)
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
-        return "".join(chunks).strip()
+        raw_output = "".join(chunks).strip()
+        logger.info(
+            "Long-term relationship raw model output:\n{}",
+            raw_output or "[empty output]",
+        )
+        return raw_output
 
     async def summarize_short_term_relationship(
         self,
@@ -565,17 +570,20 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info(
-            "Requesting one DeepSeek short-term relationship summary for {} turns",
-            len(recent_turns),
-        )
+        logger.info("Short-term relationship system prompt:\n{}", system_prompt)
+        logger.info("Short-term relationship user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
                 chunks.append(event)
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
-        return "".join(chunks).strip()
+        raw_output = "".join(chunks).strip()
+        logger.info(
+            "Short-term relationship raw model output:\n{}",
+            raw_output or "[empty output]",
+        )
+        return raw_output
 
     @staticmethod
     def _sanitize_request_for_log(value: Any) -> Any:

@@ -13,7 +13,7 @@
       "asr": "ASR",
       "tts": "TTS",
       "agent": "Agent",
-      "about": "About"
+      "rag": "RAG"
     },
     "general": {
       "language": "Language",
@@ -63,15 +63,12 @@
       "idleSecondsToSpeak": "Idle seconds allow AI to speak",
       "allowButtonTrigger": "Prompt AI to Speak via Raise Hand Button"
     },
-    "about": {
-      "title": "Open LLM VTuber Frontend",
-      "version": "Version",
-      "projectLinks": "Project Links",
-      "github": "GitHub",
-      "documentation": "Documentation",
-      "license": "License",
-      "copyright": "Copyright",
-      "viewLicense": "View License"
+    "rag": {
+      "topK": "Top K",
+      "threshold": "Threshold",
+      "hybridWeight": "Hybrid Search Weight",
+      "keywordOnly": "Keyword only",
+      "vectorOnly": "Vector only"
     }
   },
   "footer": {

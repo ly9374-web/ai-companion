@@ -53,7 +53,6 @@ TIME_REQUEST_COMMANDS = {
 }
 CONTEXT_INJECTION_SCHEDULE_METADATA_KEY = "context_injection_schedule"
 CONTEXT_INJECTION_KEYS = (
-    "long_term_memory_context",
     "long_term_relationship_context",
     "short_term_relationship_context",
 )
@@ -179,9 +178,7 @@ async def process_single_conversation(
             )
 
         next_turn_number = completed_context_turns + 1
-        injection_turn_number = (
-            next_turn_number if context_schedule_initialized else 1
-        )
+        injection_turn_number = next_turn_number if context_schedule_initialized else 1
 
         if is_first_turn:
             activity_lines = [prompt_builder.load_runtime_prompt("new_chat_created")]
@@ -213,10 +210,12 @@ async def process_single_conversation(
                 )
         if context.history_uid and not skip_history:
             long_term_memory_context = (
-                await long_term_memory_manager.consume_injection(
+                await long_term_memory_manager.retrieve_injection(
                     conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    turn_number=injection_turn_number,
+                    query=input_text,
+                    top_k=context.rag_top_k,
+                    threshold=context.rag_threshold,
+                    hybrid_weight=context.rag_hybrid_weight,
                 )
             )
             if long_term_memory_context:
@@ -383,22 +382,6 @@ async def process_single_conversation(
                     summarize=summarize,
                 )
 
-            summarize_relationship = getattr(
-                context.agent_engine,
-                "summarize_long_term_relationship",
-                None,
-            )
-            if summarize_relationship is None:
-                logger.error(
-                    "The active agent does not support long-term relationship summaries"
-                )
-            else:
-                await long_term_relationship_manager.record_completed_turn(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    summarize=summarize_relationship,
-                )
-
             summarize_short_relationship = getattr(
                 context.agent_engine,
                 "summarize_short_term_relationship",
@@ -416,6 +399,24 @@ async def process_single_conversation(
                     assistant_content=full_response,
                     browser_time=browser_time,
                     summarize=summarize_short_relationship,
+                )
+
+            summarize_relationship = getattr(
+                context.agent_engine,
+                "summarize_long_term_relationship",
+                None,
+            )
+            if summarize_relationship is None:
+                logger.error(
+                    "The active agent does not support long-term relationship summaries"
+                )
+            else:
+                await long_term_relationship_manager.record_completed_turn(
+                    conf_uid=context.character_config.conf_uid,
+                    history_uid=context.history_uid,
+                    user_content=input_text,
+                    assistant_content=full_response,
+                    summarize=summarize_relationship,
                 )
 
         await finalize_conversation_turn(

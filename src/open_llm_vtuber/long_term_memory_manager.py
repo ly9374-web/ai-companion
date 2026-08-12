@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import tempfile
@@ -19,9 +18,10 @@ from .chat_history_manager import (
     get_metadata,
     update_metadate,
 )
+from .memory_rag import RagMemory, memory_rag_store
 
 
-SUMMARY_INTERVAL = 3
+SUMMARY_INTERVAL = 6
 MAX_LONG_TERM_MEMORIES: int | None = None
 LONG_TERM_MEMORY_METADATA_KEY = "long_term_memory"
 
@@ -30,11 +30,20 @@ LONG_TERM_MEMORY_METADATA_KEY = "long_term_memory"
 class LongTermMemory:
     name: str
     content: str
+    type: str = "长期记忆"
+    reference: str = ""
+    count: int = 0
+
+    def to_rag_memory(self) -> RagMemory:
+        return RagMemory(
+            count=self.count,
+            content=self.content,
+            type=self.type,
+            reference=self.reference or self.name,
+        )
 
 
-SummaryCallback = Callable[
-    [list[dict[str, str]], list[LongTermMemory]], Awaitable[str]
-]
+SummaryCallback = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 
 class LongTermMemoryManager:
@@ -88,48 +97,84 @@ class LongTermMemoryManager:
 
     @classmethod
     def parse_summary(cls, raw_output: str) -> list[LongTermMemory]:
-        """Parse and strictly validate the JSON returned by the summarizer."""
+        """Parse strict --- blocks containing count/content/type/reference."""
         if not isinstance(raw_output, str) or not raw_output.strip():
             raise ValueError("Long-term memory summary is empty")
 
         text = raw_output.strip()
-        fenced_match = re.fullmatch(
-            r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL
-        )
-        if fenced_match:
-            text = fenced_match.group(1).strip()
+        lines = text.splitlines()
+        blocks: list[list[str]] = []
+        current: list[str] | None = None
+        for line in lines:
+            if line.strip() == "---":
+                if current is None:
+                    current = []
+                else:
+                    blocks.append(current)
+                    current = None
+                continue
+            if current is None:
+                if line.strip():
+                    raise ValueError(
+                        "Long-term memory output contains text outside --- blocks"
+                    )
+                continue
+            current.append(line)
 
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            object_start = text.find("{")
-            if object_start < 0:
-                raise ValueError("Long-term memory summary does not contain JSON")
-            try:
-                payload, _ = json.JSONDecoder().raw_decode(text[object_start:])
-            except json.JSONDecodeError as exc:
-                raise ValueError("Long-term memory summary contains invalid JSON") from exc
+        if current is not None:
+            raise ValueError("Long-term memory output has an unclosed --- block")
+        if not blocks:
+            raise ValueError("Long-term memory output does not contain a --- block")
 
-        if not isinstance(payload, dict):
-            raise ValueError("Long-term memory summary must be a JSON object")
-
-        items = payload.get("长期记忆")
-        if not isinstance(items, list):
-            raise ValueError("长期记忆 must be an array")
-
+        expected_keys = ["count", "content", "type", "reference"]
         memories: list[LongTermMemory] = []
-        for item in items:
-            if not isinstance(item, dict):
-                raise ValueError("Each long-term memory entry must be an object")
-            name = cls._normalize_text(item.get("记忆命名", ""))
-            content = cls._normalize_text(item.get("记忆内容", ""))
-            if not name:
-                raise ValueError("记忆命名 cannot be empty")
-            if len(name) >= 8:
-                raise ValueError("记忆命名 must contain fewer than 8 characters")
-            if not content:
-                raise ValueError("记忆内容 cannot be empty")
-            memories.append(LongTermMemory(name=name, content=content))
+        for block_index, block in enumerate(blocks, start=1):
+            if len(block) != len(expected_keys):
+                raise ValueError(
+                    f"Long-term memory block {block_index} must contain exactly "
+                    "four field lines"
+                )
+
+            values: dict[str, str] = {}
+            for expected_key, line in zip(expected_keys, block):
+                match = re.fullmatch(
+                    rf"\s*{expected_key}\s*:\s*(.*?)\s*",
+                    line,
+                )
+                if not match:
+                    raise ValueError(
+                        f"Long-term memory block {block_index} must use field "
+                        f"order count/content/type/reference"
+                    )
+                values[expected_key] = cls._normalize_text(match.group(1))
+
+            if not any(values.values()):
+                if len(blocks) != 1:
+                    raise ValueError(
+                        "An empty long-term memory block must be the only block"
+                    )
+                return []
+            if not values["content"] or not values["type"] or not values["reference"]:
+                raise ValueError(
+                    f"Long-term memory block {block_index} may only leave all four "
+                    "fields empty; otherwise content/type/reference are required"
+                )
+            raw_count = values["count"]
+            if raw_count and not re.fullmatch(r"\d{3}", raw_count):
+                raise ValueError(
+                    f"Long-term memory block {block_index} count must be empty or "
+                    "a three-digit number"
+                )
+            count = int(raw_count) if raw_count else 0
+            memories.append(
+                LongTermMemory(
+                    name=values["reference"],
+                    content=values["content"],
+                    type=values["type"],
+                    reference=values["reference"],
+                    count=count,
+                )
+            )
 
         return memories
 
@@ -144,18 +189,79 @@ class LongTermMemoryManager:
             return []
 
         memories: list[LongTermMemory] = []
-        blocks = re.split(r"^\s*---+\s*$", text, flags=re.MULTILINE)
-        for block in blocks:
-            name_match = re.search(r"^记忆命名：\s*(.+)$", block, flags=re.MULTILINE)
-            content_match = re.search(
-                r"^记忆内容：\s*(.+)$", block, flags=re.MULTILINE
-            )
-            if not name_match or not content_match:
+        blocks: list[str] = []
+        current: list[str] | None = None
+        for line in text.splitlines():
+            if re.fullmatch(r"\s*---\s*", line):
+                if current is None:
+                    current = []
+                else:
+                    block = "\n".join(current).strip()
+                    if block:
+                        blocks.append(block)
+                    current = None
                 continue
-            name = self._normalize_text(name_match.group(1))
-            content = self._normalize_text(content_match.group(1))
-            if name and content:
-                memories.append(LongTermMemory(name=name, content=content))
+            if current is not None:
+                current.append(line)
+
+        for block in blocks:
+            values: dict[str, str] = {}
+            active_key: str | None = None
+            for line in block.splitlines():
+                match = re.match(r"^\s*(count|content|type|reference)\s*:\s*(.*)$", line)
+                if match:
+                    active_key = match.group(1)
+                    values[active_key] = match.group(2).strip()
+                elif active_key and line.strip():
+                    values[active_key] = f"{values[active_key]}\n{line.strip()}".strip()
+            if values.get("content"):
+                try:
+                    count = int(values.get("count", "0"))
+                except ValueError:
+                    count = 0
+                reference = self._normalize_text(values.get("reference", ""))
+                memories.append(
+                    LongTermMemory(
+                        name=reference or f"记忆{count}",
+                        content=self._normalize_text(values["content"]),
+                        type=self._normalize_text(values.get("type", "长期记忆")),
+                        reference=reference,
+                        count=max(0, count),
+                    )
+                )
+
+        # Read the legacy format once so an older character can migrate on write.
+        if not memories:
+            for block in re.split(r"^\s*---+\s*$", text, flags=re.MULTILINE):
+                name_match = re.search(r"^记忆命名：\s*(.+)$", block, flags=re.MULTILINE)
+                content_match = re.search(r"^记忆内容：\s*(.+)$", block, flags=re.MULTILINE)
+                if name_match and content_match:
+                    name = self._normalize_text(name_match.group(1))
+                    content = self._normalize_text(content_match.group(1))
+                    if name and content:
+                        memories.append(LongTermMemory(name=name, content=content, reference=name))
+
+        used_counts: set[int] = set()
+        next_count = 1
+        numbered: list[LongTermMemory] = []
+        for memory in memories:
+            count = memory.count
+            if count < 1 or count in used_counts:
+                while next_count in used_counts:
+                    next_count += 1
+                count = next_count
+            used_counts.add(count)
+            next_count = max(next_count, count + 1)
+            numbered.append(
+                LongTermMemory(
+                    name=memory.name,
+                    content=memory.content,
+                    type=memory.type,
+                    reference=memory.reference,
+                    count=count,
+                )
+            )
+        memories = numbered
         if self.max_memories is None:
             return memories
         return memories[: self.max_memories]
@@ -172,8 +278,11 @@ class LongTermMemoryManager:
         for memory in normalized:
             lines.extend(
                 [
-                    f"记忆命名：{memory.name}",
-                    f"记忆内容：{memory.content}",
+                    "---",
+                    f"count:{memory.count:03d}",
+                    f"content:{memory.content}",
+                    f"type:{memory.type}",
+                    f"reference:{memory.reference or memory.name}",
                     "---",
                 ]
             )
@@ -209,32 +318,50 @@ class LongTermMemoryManager:
         new_memories: Iterable[LongTermMemory],
         conf_uid: str = "",
     ) -> list[LongTermMemory]:
-        """Prepend new memories and update entries with matching names."""
+        """Upsert summarized memories and synchronize the derived RAG index."""
         memory_path = self._get_memory_path(conf_uid)
         async with self._get_memory_lock(conf_uid):
             existing_memories = self._read_memories_unlocked(memory_path)
 
-            # Keep the summarizer's order for the new batch, while using the
-            # final value if it accidentally emits the same name more than once.
-            deduplicated_new: list[LongTermMemory] = []
-            seen_new_names: set[str] = set()
-            for memory in reversed(list(new_memories)):
-                if memory.name in seen_new_names:
-                    continue
-                seen_new_names.add(memory.name)
-                deduplicated_new.append(memory)
-            deduplicated_new.reverse()
-
-            existing_memories = [
-                memory
+            by_count = {memory.count: memory for memory in existing_memories}
+            reference_to_count = {
+                (memory.reference or memory.name).casefold(): memory.count
                 for memory in existing_memories
-                if memory.name not in seen_new_names
-            ]
-            memories = deduplicated_new + existing_memories
+            }
+            next_count = max(by_count, default=0) + 1
+            for memory in new_memories:
+                count = memory.count
+                if count < 1:
+                    count = reference_to_count.get(
+                        (memory.reference or memory.name).casefold(), 0
+                    )
+                if count < 1:
+                    count = next_count
+                    next_count += 1
+                normalized_memory = LongTermMemory(
+                    name=memory.name,
+                    content=memory.content,
+                    type=memory.type,
+                    reference=memory.reference or memory.name,
+                    count=count,
+                )
+                by_count[count] = normalized_memory
+                reference_to_count[normalized_memory.reference.casefold()] = count
+
+            memories = [by_count[count] for count in sorted(by_count)]
             if self.max_memories is not None:
                 memories = memories[: self.max_memories]
             self._write_memories_unlocked(memory_path, memories)
-            return memories
+        if conf_uid:
+            try:
+                await asyncio.to_thread(
+                    memory_rag_store.sync,
+                    conf_uid,
+                    [memory.to_rag_memory() for memory in memories],
+                )
+            except Exception as exc:
+                logger.error("Failed to update the long-term memory RAG index: {}", exc)
+        return memories
 
     @staticmethod
     def _get_state(conf_uid: str, history_uid: str) -> dict:
@@ -252,48 +379,75 @@ class LongTermMemoryManager:
             {LONG_TERM_MEMORY_METADATA_KEY: state},
         )
 
-    async def consume_injection(
+    async def retrieve_injection(
         self,
         conf_uid: str,
-        history_uid: str,
-        turn_number: int | None = None,
+        query: str,
+        *,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        hybrid_weight: float = 0.5,
     ) -> str:
-        """Return memory on turn one and every three completed turns thereafter.
-
-        New conversations immediately receive the existing memory file so that
-        memories accumulated in previous conversations carry over.
-        """
-        if not conf_uid or not history_uid:
+        """Retrieve content for this request without adding it to chat history."""
+        if not conf_uid or not query.strip():
             return ""
-
-        if turn_number is not None:
-            if turn_number < 1:
-                return ""
-            if turn_number != 1 and (turn_number - 1) % self.summary_interval != 0:
-                return ""
-            memories = await self.read_memories(conf_uid)
-        else:
-            async with self._get_history_lock(conf_uid, history_uid):
-                state = self._get_state(conf_uid, history_uid)
-                is_new_history = not state  # first turn of a new conversation
-
-                if not is_new_history and not state.get("inject_next_turn", False):
-                    return ""
-
-                memories = await self.read_memories(conf_uid)
-                state["inject_next_turn"] = False
-                if not self._save_state(conf_uid, history_uid, state):
-                    logger.error(
-                        "Failed to persist long-term memory injection state for history {}",
-                        history_uid,
-                    )
-                    return ""
-
+        mode = (
+            "keyword"
+            if hybrid_weight == 0.0
+            else "vector"
+            if hybrid_weight == 1.0
+            else "hybrid"
+        )
+        threshold_log = "ignored" if hybrid_weight == 0.0 else f"{threshold:.2f}"
+        memories = await self.read_memories(conf_uid)
         if not memories:
+            logger.info(
+                "Long-term memory RAG for character {}: mode={} top_k={} "
+                "threshold={} hybrid_weight={:.2f} recalled=0 "
+                "(no long-term memories)",
+                conf_uid,
+                mode,
+                top_k,
+                threshold_log,
+                hybrid_weight,
+            )
             return ""
-
+        try:
+            retrieved = await asyncio.to_thread(
+                memory_rag_store.retrieve,
+                conf_uid,
+                query,
+                [memory.to_rag_memory() for memory in memories],
+                top_k=max(1, min(20, int(top_k))),
+                threshold=max(0.0, min(1.0, float(threshold))),
+                hybrid_weight=max(0.0, min(1.0, float(hybrid_weight))),
+            )
+        except Exception as exc:
+            logger.error("Long-term memory retrieval failed: {}", exc)
+            return ""
+        logger.info(
+            "Long-term memory RAG for character {}: mode={} top_k={} "
+            "threshold={} hybrid_weight={:.2f} recalled={}",
+            conf_uid,
+            mode,
+            top_k,
+            threshold_log,
+            hybrid_weight,
+            len(retrieved),
+        )
+        for index, memory in enumerate(retrieved, start=1):
+            logger.info(
+                "Recalled long-term memory {}/{}: count={:03d} type={} "
+                "reference={} content={}",
+                index,
+                len(retrieved),
+                memory.count,
+                memory.type,
+                memory.reference,
+                memory.content,
+            )
         return prompt_builder.build_memory_injection(
-            (memory.name, memory.content) for memory in memories
+            memory.content for memory in retrieved
         )
 
     async def record_completed_turn(
@@ -304,7 +458,7 @@ class LongTermMemoryManager:
         assistant_content: str,
         summarize: SummaryCallback,
     ) -> bool:
-        """Record one new single-chat turn and summarize each new group of three."""
+        """Record one new single-chat turn and summarize each new group of six."""
         if not conf_uid or not history_uid:
             return False
 
@@ -318,12 +472,14 @@ class LongTermMemoryManager:
             pending_turns = state.get("pending_turns", [])
             if not isinstance(pending_turns, list):
                 pending_turns = []
+            if len(pending_turns) >= self.summary_interval:
+                pending_turns = []
 
             pending_turns.append(
                 {"user": user_content, "assistant": assistant_content}
             )
+            pending_turns = pending_turns[-self.summary_interval :]
             state["pending_turns"] = pending_turns
-            state.setdefault("inject_next_turn", False)
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
                     "Failed to persist long-term memory turn for history {}",
@@ -334,12 +490,30 @@ class LongTermMemoryManager:
             if len(pending_turns) < self.summary_interval:
                 return False
 
-            summary_turns = pending_turns[: self.summary_interval]
-            existing_memories = await self.read_memories(conf_uid)
+            summary_turns = pending_turns[-self.summary_interval :]
+            new_memories: list[LongTermMemory] | None = None
+            last_format_error: ValueError | None = None
+            for _ in range(3):
+                raw_output = await summarize(summary_turns)
+                try:
+                    new_memories = self.parse_summary(raw_output)
+                    break
+                except ValueError as exc:
+                    last_format_error = exc
+
+            if new_memories is None:
+                state["pending_turns"] = []
+                self._save_state(conf_uid, history_uid, state)
+                logger.error(
+                    "Long-term memory summarization failed for history {} after "
+                    "3 format attempts: {}",
+                    history_uid,
+                    last_format_error,
+                )
+                return False
+
             try:
-                raw_output = await summarize(summary_turns, existing_memories)
-                new_memories = self.parse_summary(raw_output)
-                await self.store_memories(new_memories, conf_uid)
+                stored_memories = await self.store_memories(new_memories, conf_uid)
             except Exception as exc:
                 logger.error(
                     "Long-term memory summarization failed for history {}: {}",
@@ -348,24 +522,7 @@ class LongTermMemoryManager:
                 )
                 return False
 
-            memory_output = json.dumps(
-                {
-                    "长期记忆": [
-                        {"记忆命名": memory.name, "记忆内容": memory.content}
-                        for memory in new_memories
-                    ]
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            logger.info(
-                "Long-term memory output for history {}:\n{}",
-                history_uid,
-                memory_output,
-            )
-
             state["pending_turns"] = pending_turns[self.summary_interval :]
-            state["inject_next_turn"] = True
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
                     "Long-term memory was saved but its history checkpoint failed for {}",

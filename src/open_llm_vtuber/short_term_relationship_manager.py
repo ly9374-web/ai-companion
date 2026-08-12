@@ -20,9 +20,8 @@ from .chat_history_manager import (
 )
 
 
-UPDATE_INTERVAL = 4
-INJECTION_INTERVAL = 4
-MAX_RELATIONSHIP_CHARACTERS = 70
+UPDATE_INTERVAL = 6
+INJECTION_INTERVAL = 6
 SHORT_TERM_RELATIONSHIP_METADATA_KEY = "short_term_relationship"
 
 
@@ -41,15 +40,11 @@ class ShortTermRelationshipManager:
         history_root: str | Path = "chat_history",
         update_interval: int = UPDATE_INTERVAL,
         injection_interval: int = INJECTION_INTERVAL,
-        max_characters: int = MAX_RELATIONSHIP_CHARACTERS,
     ) -> None:
         if update_interval < 1:
             raise ValueError("update_interval must be at least 1")
         if injection_interval < 1:
             raise ValueError("injection_interval must be at least 1")
-        if max_characters < 1:
-            raise ValueError("max_characters must be at least 1")
-
         self.relationship_path = (
             Path(relationship_path) if relationship_path is not None else None
         )
@@ -61,7 +56,6 @@ class ShortTermRelationshipManager:
         self.history_root = Path(history_root)
         self.update_interval = update_interval
         self.injection_interval = injection_interval
-        self.max_characters = max_characters
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._relationship_locks: dict[str, asyncio.Lock] = {}
 
@@ -100,7 +94,7 @@ class ShortTermRelationshipManager:
         return " ".join(str(value).strip().split())
 
     def parse_summary(self, raw_output: str) -> str:
-        """Parse the exact JSON object and enforce the 70-character limit."""
+        """Parse the exact JSON object requested by the short-relationship prompt."""
         if not isinstance(raw_output, str) or not raw_output.strip():
             raise ValueError("Short-term relationship summary is empty")
 
@@ -142,10 +136,6 @@ class ShortTermRelationshipManager:
         relationship = self._normalize_text(raw_relationship)
         if not relationship:
             raise ValueError("short_term_relationship cannot be empty")
-        if len(relationship) > self.max_characters:
-            raise ValueError(
-                f"short_term_relationship must not exceed {self.max_characters} characters"
-            )
         return relationship
 
     @staticmethod
@@ -215,7 +205,7 @@ class ShortTermRelationshipManager:
         history_uid: str,
         turn_number: int | None = None,
     ) -> str:
-        """Return short relationship on turn one and every four completed turns after it.
+        """Return short relationship on turn one and every six completed turns after it.
 
         New conversations immediately receive the existing relationship file so
         that relationships built in previous conversations carry over.
@@ -276,7 +266,7 @@ class ShortTermRelationshipManager:
         summarize: RelationshipSummaryCallback,
         browser_time: str = "",
     ) -> bool:
-        """Record a turn and rewrite the short relationship from the latest four."""
+        """Record a turn and rewrite the short relationship from the latest six."""
         if not conf_uid or not history_uid:
             return False
 
@@ -289,6 +279,8 @@ class ShortTermRelationshipManager:
             state = self._get_state(conf_uid, history_uid)
             pending_turns = state.get("pending_turns", [])
             if not isinstance(pending_turns, list):
+                pending_turns = []
+            if len(pending_turns) >= self.update_interval:
                 pending_turns = []
             pending_turns.append(
                 {"user": user_content, "assistant": assistant_content}
@@ -330,23 +322,14 @@ class ShortTermRelationshipManager:
                         relationship_path, relationship
                     )
                 except Exception as exc:
+                    state["pending_turns"] = []
+                    self._save_state(conf_uid, history_uid, state)
                     logger.error(
                         "Short-term relationship update failed for history {}: {}",
                         history_uid,
                         exc,
                     )
                     return False
-
-            relationship_output = json.dumps(
-                {"short_term_relationship": relationship},
-                ensure_ascii=False,
-                indent=2,
-            )
-            logger.info(
-                "Short-term relationship output for history {}:\n{}",
-                history_uid,
-                relationship_output,
-            )
 
             state["pending_turns"] = []
             if not self._save_state(conf_uid, history_uid, state):

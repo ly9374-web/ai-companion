@@ -9,6 +9,7 @@ import { toaster } from '@/components/ui/toaster';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredGenerateAudio } from '@/constants/generate-audio';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
+import { getStoredRagSettings } from '@/constants/rag-settings';
 
 export interface DisplayText {
   text: string;
@@ -127,6 +128,7 @@ class WebSocketService {
   }
 
   private initializeConnection() {
+    const ragSettings = getStoredRagSettings();
     this.sendMessage({
       type: 'set-generate-audio',
       enabled: getStoredGenerateAudio(),
@@ -139,6 +141,12 @@ class WebSocketService {
     this.sendMessage({
       type: 'set-max-history-turns',
       max_history_turns: getStoredMaxHistoryTurns(),
+    });
+    this.sendMessage({
+      type: 'set-rag-options',
+      top_k: ragSettings.topK,
+      threshold: ragSettings.threshold,
+      hybrid_weight: ragSettings.hybridWeight,
     });
     this.sendMessage({
       type: 'fetch-backgrounds',

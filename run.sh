@@ -69,20 +69,29 @@ if nc -z localhost 12393 2>/dev/null; then
   exit 1
 fi
 
-# Auto-open browser once server is actually ready (poll port)
+# Auto-open the browser only after the backend can actually serve HTTP.
+# The waiter is cleaned up automatically if the backend fails or is stopped.
+BROWSER_WAITER_PID=""
+cleanup_browser_waiter() {
+  if [ -n "$BROWSER_WAITER_PID" ]; then
+    kill "$BROWSER_WAITER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_browser_waiter EXIT INT TERM
+
 (
-  echo "[INFO] Waiting for server to be ready on port 12393..."
-  for i in $(seq 1 30); do
-    if nc -z localhost 12393 2>/dev/null; then
+  echo "[INFO] Waiting for the server to accept HTTP requests on port 12393..."
+  while true; do
+    if curl --noproxy '*' --silent --fail --output /dev/null \
+      --connect-timeout 1 --max-time 2 http://127.0.0.1:12393/; then
       echo "[INFO] Server is ready, opening browser..."
       open http://localhost:12393
       exit 0
     fi
     sleep 1
   done
-  echo "[WARN] Server did not start within 30s, opening browser anyway..."
-  open http://localhost:12393
 ) &
+BROWSER_WAITER_PID=$!
 
 # Run the server (pass through all arguments)
 if command -v uv &> /dev/null; then

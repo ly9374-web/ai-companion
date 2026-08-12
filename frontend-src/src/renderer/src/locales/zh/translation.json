@@ -13,7 +13,7 @@
       "asr": "识别",
       "tts": "合成",
       "agent": "代理",
-      "about": "关于"
+      "rag": "RAG"
     },
     "general": {
       "language": "语言",
@@ -63,14 +63,12 @@
       "idleSecondsToSpeak": "空闲多少秒后AI可发言",
       "allowButtonTrigger": "通过举手按钮提示AI发言"
     },
-    "about": {
-      "title": "Open LLM VTuber 前端",
-      "version": "版本",
-      "projectLinks": "项目链接",
-      "github": "GitHub",
-      "documentation": "文档",
-      "copyright": "版权",
-      "viewLicense": "查看许可证"
+    "rag": {
+      "topK": "Top K",
+      "threshold": "Threshold",
+      "hybridWeight": "混合检索权重",
+      "keywordOnly": "纯关键词",
+      "vectorOnly": "纯向量"
     }
   },
   "footer": {
