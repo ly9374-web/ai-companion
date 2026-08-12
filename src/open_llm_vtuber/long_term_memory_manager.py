@@ -252,9 +252,13 @@ class LongTermMemoryManager:
             {LONG_TERM_MEMORY_METADATA_KEY: state},
         )
 
-    async def consume_injection(self, conf_uid: str, history_uid: str) -> str:
-        """Return this character's memory on the first turn of a new conversation
-        and on every turn marked by a completed summary cycle.
+    async def consume_injection(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        turn_number: int | None = None,
+    ) -> str:
+        """Return memory on turn one and every three completed turns thereafter.
 
         New conversations immediately receive the existing memory file so that
         memories accumulated in previous conversations carry over.
@@ -262,21 +266,28 @@ class LongTermMemoryManager:
         if not conf_uid or not history_uid:
             return ""
 
-        async with self._get_history_lock(conf_uid, history_uid):
-            state = self._get_state(conf_uid, history_uid)
-            is_new_history = not state  # first turn of a new conversation
-
-            if not is_new_history and not state.get("inject_next_turn", False):
+        if turn_number is not None:
+            if turn_number < 1:
                 return ""
-
+            if turn_number != 1 and (turn_number - 1) % self.summary_interval != 0:
+                return ""
             memories = await self.read_memories(conf_uid)
-            state["inject_next_turn"] = False
-            if not self._save_state(conf_uid, history_uid, state):
-                logger.error(
-                    "Failed to persist long-term memory injection state for history {}",
-                    history_uid,
-                )
-                return ""
+        else:
+            async with self._get_history_lock(conf_uid, history_uid):
+                state = self._get_state(conf_uid, history_uid)
+                is_new_history = not state  # first turn of a new conversation
+
+                if not is_new_history and not state.get("inject_next_turn", False):
+                    return ""
+
+                memories = await self.read_memories(conf_uid)
+                state["inject_next_turn"] = False
+                if not self._save_state(conf_uid, history_uid, state):
+                    logger.error(
+                        "Failed to persist long-term memory injection state for history {}",
+                        history_uid,
+                    )
+                    return ""
 
         if not memories:
             return ""

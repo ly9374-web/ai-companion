@@ -164,7 +164,9 @@ def build_short_term_relationship_summary_input(
     )
     return prompt_loader.render_prompt(
         "summaries.short_term_relationship.user_prompt",
-        current_time_context=current_time_context,
+        current_time_context_json=json.dumps(
+            current_time_context, ensure_ascii=False
+        ),
         recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
         long_term_relationship_file_json=json.dumps(
             long_term_relationship_file, ensure_ascii=False

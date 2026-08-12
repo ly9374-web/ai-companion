@@ -1,26 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useVAD } from "@/context/vad-context";
 
-const INTERACTIVE_SELECTOR = [
-  "input",
-  "textarea",
-  "select",
-  "button",
-  "a[href]",
-  '[contenteditable]:not([contenteditable="false"])',
-  '[role="button"]',
-  '[role="textbox"]',
-].join(",");
-
-function isInteractiveTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element && Boolean(target.closest(INTERACTIVE_SELECTOR))
-  );
-}
-
 /**
  * Hold Space to define one speech segment while the microphone is already on.
- * Interactive controls retain their native Space-key behavior.
+ * Space is reserved for speech and never activates the currently focused control.
  */
 export function useSpaceToTalk() {
   const { startManualSpeech, finishManualSpeech } = useVAD();
@@ -28,24 +11,24 @@ export function useSpaceToTalk() {
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.code !== "Space" || event.isComposing) return;
+
+      // Capture Space before focused buttons can turn it into a synthetic click.
+      event.preventDefault();
+      event.stopPropagation();
+
       if (
-        event.code !== "Space" ||
         event.repeat ||
-        event.isComposing ||
         event.ctrlKey ||
         event.altKey ||
         event.metaKey ||
-        event.shiftKey ||
-        isInteractiveTarget(event.target)
-      ) {
-        return;
-      }
+        event.shiftKey
+      ) return;
 
       const started = startManualSpeech();
       if (!started) return;
 
       spaceSessionActiveRef.current = true;
-      event.preventDefault();
     };
 
     const finishSpaceSession = (event?: globalThis.KeyboardEvent) => {
@@ -57,20 +40,22 @@ export function useSpaceToTalk() {
     };
 
     const handleKeyUp = (event: globalThis.KeyboardEvent) => {
-      if (event.code === "Space") {
-        finishSpaceSession(event);
-      }
+      if (event.code !== "Space" || event.isComposing) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      finishSpaceSession(event);
     };
 
     const handleWindowBlur = () => finishSpaceSession();
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
     window.addEventListener("blur", handleWindowBlur);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", handleWindowBlur);
       finishSpaceSession();
     };

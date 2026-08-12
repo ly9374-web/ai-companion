@@ -165,7 +165,7 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             [],
         )
 
-    async def test_injects_complete_json_on_fifth_and_tenth_user_prompts(self):
+    async def test_injects_complete_json_on_first_and_every_four_turns(self):
         short_file = (
             '{\n  "short_term_relationship": "最近关系正在升温。"\n}\n'
         )
@@ -176,20 +176,21 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             f"{module}.update_metadate", self.fake_update_metadata
         ):
             injections = [
-                await self.manager.consume_injection("角色", "会话")
-                for _ in range(10)
+                await self.manager.consume_injection(
+                    "角色", "会话", turn_number=turn_number
+                )
+                for turn_number in range(1, 10)
             ]
 
-        self.assertTrue(all(not value for value in injections[:4]))
+        self.assertIn(short_file.rstrip(), injections[0])
+        self.assertTrue(all(not value for value in injections[1:4]))
         self.assertIn(short_file.rstrip(), injections[4])
-        self.assertTrue(all(not value for value in injections[5:9]))
-        self.assertIn(short_file.rstrip(), injections[9])
-        state = self.metadata_store[SHORT_TERM_RELATIONSHIP_METADATA_KEY]
-        self.assertEqual(state["user_prompt_count"], 10)
+        self.assertTrue(all(not value for value in injections[5:8]))
+        self.assertIn(short_file.rstrip(), injections[8])
 
 
 class ShortRelationshipPromptInjectionTests(unittest.TestCase):
-    def test_all_hidden_contexts_are_sent_but_not_saved_to_short_memory(self):
+    def test_all_hidden_contexts_are_sent_and_saved_as_hidden_snapshots(self):
         agent = object.__new__(BasicMemoryAgent)
         agent._memory = []
         batch_input = BatchInput(
@@ -214,7 +215,21 @@ class ShortRelationshipPromptInjectionTests(unittest.TestCase):
         self.assertIn("我们最近怎么样", request_text)
         self.assertEqual(
             agent._memory,
-            [{"role": "user", "content": "我们最近怎么样？"}],
+            [
+                {
+                    "role": "user",
+                    "content": "我们最近怎么样？",
+                    "context_injections": {
+                        "long_term_memory_context": "[长期记忆]\n- 用户喜欢咖啡。",
+                        "long_term_relationship_context": (
+                            '[长期关系]\n{"long_term_relationship":"双方是朋友。"}'
+                        ),
+                        "short_term_relationship_context": (
+                            '[短期关系]\n{"short_term_relationship":"最近正在升温。"}'
+                        ),
+                    },
+                }
+            ],
         )
 
 

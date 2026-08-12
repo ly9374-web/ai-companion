@@ -129,6 +129,15 @@ export function InputSubtitle() {
             <Flex gap="2">
               <IconButton
                 aria-label="Toggle microphone"
+                tabIndex={-1}
+                onFocus={(event) => event.currentTarget.blur()}
+                onMouseDown={(event) => event.preventDefault()}
+                onKeyDown={(event) => {
+                  if (event.code === 'Space') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }
+                }}
                 onClick={handleMicToggle}
                 {...inputSubtitleStyles.iconButton}
               >

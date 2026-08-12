@@ -4,6 +4,8 @@ import json
 from loguru import logger
 import numpy as np
 
+from prompts import prompt_builder
+
 from .conversation_utils import (
     create_batch_input,
     process_agent_output,
@@ -15,7 +17,12 @@ from .conversation_utils import (
 )
 from .types import WebSocketSend
 from .tts_manager import TTSTaskManager
-from ..chat_history_manager import get_history, store_message
+from ..chat_history_manager import (
+    get_history,
+    get_metadata,
+    store_message,
+    update_metadate,
+)
 from ..long_term_memory_manager import long_term_memory_manager
 from ..long_term_relationship_manager import long_term_relationship_manager
 from ..short_term_relationship_manager import short_term_relationship_manager
@@ -25,7 +32,31 @@ from ..service_context import ServiceContext
 from ..agent.output_types import SentenceOutput, AudioOutput, DisplayText, Actions
 
 
-TIME_REQUEST_COMMANDS = {"发送时间", "send the time"}
+TIME_REQUEST_COMMANDS = {
+    "发送时间",
+    "现在几点",
+    "现在几点了",
+    "几点了",
+    "现在是什么时间",
+    "当前时间",
+    "今天几号",
+    "今天几月几号",
+    "今天星期几",
+    "今天周几",
+    "send the time",
+    "what time is it",
+    "what's the time",
+    "what is the time",
+    "what's the date",
+    "what is today's date",
+    "what day is it",
+}
+CONTEXT_INJECTION_SCHEDULE_METADATA_KEY = "context_injection_schedule"
+CONTEXT_INJECTION_KEYS = (
+    "long_term_memory_context",
+    "long_term_relationship_context",
+    "short_term_relationship_context",
+)
 
 
 def _is_time_request(input_text: str) -> bool:
@@ -36,6 +67,59 @@ def _is_time_request(input_text: str) -> bool:
 def _is_first_turn(conf_uid: str, history_uid: str) -> bool:
     messages = get_history(conf_uid, history_uid)
     return not any(message.get("role") in {"human", "ai"} for message in messages)
+
+
+def _get_completed_context_turns(
+    conf_uid: str,
+    history_uid: str,
+) -> tuple[int, bool]:
+    """Return the unified completed-turn count and whether it already existed."""
+    metadata = get_metadata(conf_uid, history_uid)
+    state = metadata.get(CONTEXT_INJECTION_SCHEDULE_METADATA_KEY, {})
+    if isinstance(state, dict):
+        completed_turns = state.get("completed_turns")
+        if (
+            not isinstance(completed_turns, bool)
+            and isinstance(completed_turns, int)
+            and completed_turns >= 0
+        ):
+            return completed_turns, True
+
+    messages = get_history(conf_uid, history_uid)
+    user_turns = sum(message.get("role") == "human" for message in messages)
+    assistant_turns = sum(message.get("role") == "ai" for message in messages)
+    completed_turns = min(user_turns, assistant_turns)
+    update_metadate(
+        conf_uid,
+        history_uid,
+        {
+            CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: {
+                "completed_turns": completed_turns,
+            }
+        },
+    )
+    return completed_turns, False
+
+
+def _save_completed_context_turns(
+    conf_uid: str,
+    history_uid: str,
+    completed_turns: int,
+) -> None:
+    """Persist the unified count after one complete user-assistant turn."""
+    if not update_metadate(
+        conf_uid,
+        history_uid,
+        {
+            CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: {
+                "completed_turns": completed_turns,
+            }
+        },
+    ):
+        logger.error(
+            "Failed to persist unified context turn count for history {}",
+            history_uid,
+        )
 
 
 async def process_single_conversation(
@@ -79,11 +163,25 @@ async def process_single_conversation(
         request_metadata = dict(metadata or {})
         browser_time = request_metadata.get("browser_time", "")
         is_first_turn = False
+        completed_context_turns = 0
+        context_schedule_initialized = False
         if context.history_uid and not skip_history:
             is_first_turn = _is_first_turn(
                 context.character_config.conf_uid,
                 context.history_uid,
             )
+            (
+                completed_context_turns,
+                context_schedule_initialized,
+            ) = _get_completed_context_turns(
+                context.character_config.conf_uid,
+                context.history_uid,
+            )
+
+        next_turn_number = completed_context_turns + 1
+        injection_turn_number = (
+            next_turn_number if context_schedule_initialized else 1
+        )
 
         if is_first_turn:
             activity_lines = [prompt_builder.load_runtime_prompt("new_chat_created")]
@@ -118,6 +216,7 @@ async def process_single_conversation(
                 await long_term_memory_manager.consume_injection(
                     conf_uid=context.character_config.conf_uid,
                     history_uid=context.history_uid,
+                    turn_number=injection_turn_number,
                 )
             )
             if long_term_memory_context:
@@ -128,6 +227,7 @@ async def process_single_conversation(
                 await long_term_relationship_manager.consume_injection(
                     conf_uid=context.character_config.conf_uid,
                     history_uid=context.history_uid,
+                    turn_number=injection_turn_number,
                 )
             )
             if long_term_relationship_context:
@@ -138,6 +238,7 @@ async def process_single_conversation(
                 await short_term_relationship_manager.consume_injection(
                     conf_uid=context.character_config.conf_uid,
                     history_uid=context.history_uid,
+                    turn_number=injection_turn_number,
                 )
             )
             if short_term_relationship_context:
@@ -155,12 +256,21 @@ async def process_single_conversation(
 
         # Store user message (check if we should skip storing to history)
         if context.history_uid and not skip_history:
+            context_injections = {
+                key: request_metadata[key]
+                for key in CONTEXT_INJECTION_KEYS
+                if (
+                    isinstance(request_metadata.get(key), str)
+                    and request_metadata[key].strip()
+                )
+            }
             store_message(
                 conf_uid=context.character_config.conf_uid,
                 history_uid=context.history_uid,
                 role="human",
                 content=input_text,
                 name=context.character_config.human_name,
+                context_injections=context_injections,
             )
 
         if skip_history:
@@ -250,6 +360,12 @@ async def process_single_conversation(
                 avatar=context.character_config.avatar,
             )
             logger.info(f"AI response: {full_response}")
+
+            _save_completed_context_turns(
+                context.character_config.conf_uid,
+                context.history_uid,
+                next_turn_number,
+            )
 
             summarize = getattr(
                 context.agent_engine, "summarize_long_term_memory", None

@@ -18,6 +18,8 @@ class HistoryMessage(TypedDict):
     # Optional display information for the message
     name: Optional[str]
     avatar: Optional[str]
+    # Hidden model-only context. The frontend must not display this field.
+    context_injections: Optional[dict[str, str]]
 
 
 def _is_safe_filename(filename: str) -> bool:
@@ -159,6 +161,7 @@ def store_message(
     content: str,
     name: str | None = None,
     avatar: str | None = None,
+    context_injections: dict[str, str] | None = None,
 ):
     """Store a message in a specific history file
 
@@ -169,6 +172,7 @@ def store_message(
         content: Message content
         name: Optional display name (default None)
         avatar: Optional avatar URL (default None)
+        context_injections: Optional model-only context snapshots
     """
     if not conf_uid or not history_uid:
         if not conf_uid:
@@ -201,6 +205,12 @@ def store_message(
         new_item["name"] = name
     if avatar is not None:
         new_item["avatar"] = avatar
+    if context_injections:
+        new_item["context_injections"] = {
+            key: value
+            for key, value in context_injections.items()
+            if isinstance(value, str) and value.strip()
+        }
 
     history_data.append(new_item)
 
@@ -338,7 +348,8 @@ def get_history_list(conf_uid: str) -> List[dict]:
                         empty_history_uids.append(history_uid)
                         continue
 
-                    latest_message = actual_messages[-1]
+                    latest_message = actual_messages[-1].copy()
+                    latest_message.pop("context_injections", None)
                     history_info = {
                         "uid": history_uid,
                         "latest_message": latest_message,

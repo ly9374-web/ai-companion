@@ -56,8 +56,18 @@ ToggleButton.displayName = 'ToggleButton';
 const ActionButtons = memo(({ micOn, onMicToggle, onInterrupt }: ActionButtonsProps) => (
   <HStack gap={2}>
     <IconButton
+      aria-label="Toggle microphone"
       bg={micOn ? 'green.500' : 'red.500'}
       {...footerStyles.footer.actionButton}
+      tabIndex={-1}
+      onFocus={(event) => event.currentTarget.blur()}
+      onMouseDown={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        if (event.code === 'Space') {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
       onClick={onMicToggle}
     >
       {micOn ? <BsMicFill /> : <BsMicMuteFill />}

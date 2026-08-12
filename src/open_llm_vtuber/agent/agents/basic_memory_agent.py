@@ -35,6 +35,11 @@ class BasicMemoryAgent(AgentInterface):
     """Agent with basic chat memory and tool calling support."""
 
     _system: str = prompt_builder.load_system_prompt("default_system")
+    _CONTEXT_INJECTION_KEYS = (
+        "long_term_memory_context",
+        "long_term_relationship_context",
+        "short_term_relationship_context",
+    )
 
     def __init__(
         self,
@@ -134,7 +139,7 @@ class BasicMemoryAgent(AgentInterface):
         self._system = system
 
     def set_max_history_turns(self, max_history_turns: int) -> None:
-        """Set how many completed user turns are included in LLM context."""
+        """Set how many user and assistant turns are included in LLM context."""
         if isinstance(max_history_turns, bool) or not isinstance(
             max_history_turns, int
         ):
@@ -143,29 +148,82 @@ class BasicMemoryAgent(AgentInterface):
             raise ValueError("max_history_turns must be between 1 and 100")
         self._max_history_turns = max_history_turns
 
-    def _get_context_memory(self) -> List[Dict[str, Any]]:
-        """Return only the most recent configured number of user turns.
+    def _get_context_memory(
+        self,
+        superseded_context_keys: set[str] | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Return history after both configured role counts are reached.
 
         The complete in-process memory remains available for history persistence
         and summaries. Only the messages copied into the next LLM request are
-        truncated.
+        truncated. Hidden context snapshots are rendered only at their latest
+        retained position, and a fresh snapshot on the current request replaces
+        the historical snapshot of the same type.
         """
         max_history_turns = getattr(self, "_max_history_turns", 8)
         user_turns = 0
+        assistant_turns = 0
         start_index = 0
 
         for index in range(len(self._memory) - 1, -1, -1):
-            if self._memory[index].get("role") != "user":
+            role = self._memory[index].get("role")
+            if role == "user":
+                user_turns += 1
+            elif role == "assistant":
+                assistant_turns += 1
+            else:
                 continue
-            user_turns += 1
+
             start_index = index
-            if user_turns >= max_history_turns:
+            if (
+                user_turns >= max_history_turns
+                and assistant_turns >= max_history_turns
+            ):
                 break
 
-        if user_turns < max_history_turns:
+        if (
+            user_turns < max_history_turns
+            or assistant_turns < max_history_turns
+        ):
             start_index = 0
 
-        return [message.copy() for message in self._memory[start_index:]]
+        context_memory = [message.copy() for message in self._memory[start_index:]]
+        superseded_context_keys = superseded_context_keys or set()
+        latest_context_positions: Dict[str, int] = {}
+
+        for index, message in enumerate(context_memory):
+            context_injections = message.get("context_injections")
+            if not isinstance(context_injections, dict):
+                continue
+            for key in self._CONTEXT_INJECTION_KEYS:
+                value = context_injections.get(key)
+                if (
+                    key not in superseded_context_keys
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    latest_context_positions[key] = index
+
+        rendered_memory: List[Dict[str, Any]] = []
+        for index, message in enumerate(context_memory):
+            rendered_message = message.copy()
+            context_injections = rendered_message.pop("context_injections", None)
+            if rendered_message.get("role") == "user" and isinstance(
+                context_injections, dict
+            ):
+                active_contexts = {
+                    key: context_injections[key]
+                    for key in self._CONTEXT_INJECTION_KEYS
+                    if latest_context_positions.get(key) == index
+                }
+                if active_contexts:
+                    rendered_message["content"] = prompt_builder.build_user_request(
+                        text_prompt=str(rendered_message.get("content", "")),
+                        **active_contexts,
+                    )
+            rendered_memory.append(rendered_message)
+
+        return rendered_memory
 
     def _add_message(
         self,
@@ -173,6 +231,7 @@ class BasicMemoryAgent(AgentInterface):
         role: str,
         display_text: DisplayText | None = None,
         skip_memory: bool = False,
+        context_injections: Dict[str, str] | None = None,
     ):
         """Add message to memory."""
         if skip_memory:
@@ -200,6 +259,18 @@ class BasicMemoryAgent(AgentInterface):
             "content": text_content,
         }
 
+        normalized_context_injections = {
+            key: value
+            for key, value in (context_injections or {}).items()
+            if (
+                key in self._CONTEXT_INJECTION_KEYS
+                and isinstance(value, str)
+                and value.strip()
+            )
+        }
+        if normalized_context_injections:
+            message_data["context_injections"] = normalized_context_injections
+
         if display_text:
             if display_text.name:
                 message_data["name"] = display_text.name
@@ -210,6 +281,8 @@ class BasicMemoryAgent(AgentInterface):
             self._memory
             and self._memory[-1]["role"] == role
             and self._memory[-1]["content"] == text_content
+            and self._memory[-1].get("context_injections")
+            == message_data.get("context_injections")
         ):
             return
 
@@ -221,15 +294,36 @@ class BasicMemoryAgent(AgentInterface):
 
         self._memory = []
         for msg in messages:
-            role = "user" if msg["role"] == "human" else "assistant"
+            role = {
+                "human": "user",
+                "ai": "assistant",
+                "system": "system",
+            }.get(msg["role"])
+            if role is None:
+                logger.warning(f"Skipping history message with invalid role: {msg}")
+                continue
             content = msg["content"]
             if isinstance(content, str) and content:
-                self._memory.append(
-                    {
-                        "role": role,
-                        "content": content,
+                message_data = {
+                    "role": role,
+                    "content": content,
+                }
+                context_injections = msg.get("context_injections")
+                if isinstance(context_injections, dict):
+                    normalized_context_injections = {
+                        key: value
+                        for key, value in context_injections.items()
+                        if (
+                            key in self._CONTEXT_INJECTION_KEYS
+                            and isinstance(value, str)
+                            and value.strip()
+                        )
                     }
-                )
+                    if normalized_context_injections:
+                        message_data["context_injections"] = (
+                            normalized_context_injections
+                        )
+                self._memory.append(message_data)
             else:
                 logger.warning(f"Skipping invalid message from history: {msg}")
         logger.info(f"Loaded {len(self._memory)} messages from history.")
@@ -285,7 +379,6 @@ class BasicMemoryAgent(AgentInterface):
 
     def _to_messages(self, input_data: BatchInput) -> List[Dict[str, Any]]:
         """Prepare messages for LLM API call."""
-        messages = self._get_context_memory()
         user_content = []
         text_prompt = self._to_text_prompt(input_data)
         long_term_memory_context = ""
@@ -309,6 +402,20 @@ class BasicMemoryAgent(AgentInterface):
             tts_preference_change_context = input_data.metadata.get(
                 "tts_preference_change_context", ""
             )
+
+        context_injections = {
+            "long_term_memory_context": long_term_memory_context,
+            "long_term_relationship_context": long_term_relationship_context,
+            "short_term_relationship_context": short_term_relationship_context,
+        }
+        active_context_injections = {
+            key: value
+            for key, value in context_injections.items()
+            if isinstance(value, str) and value.strip()
+        }
+        messages = self._get_context_memory(
+            superseded_context_keys=set(active_context_injections)
+        )
 
         request_text = prompt_builder.build_user_request(
             text_prompt=text_prompt,
@@ -362,6 +469,7 @@ class BasicMemoryAgent(AgentInterface):
                         "image_memory_placeholder"
                     ),
                     "user",
+                    context_injections=active_context_injections,
                 )
         else:
             logger.warning("No content generated for user message.")

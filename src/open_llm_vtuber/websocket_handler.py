@@ -140,8 +140,8 @@ class WebSocketHandler:
             )
         )
 
-        # Start microphone
-        await websocket.send_text(json.dumps({"type": "control", "text": "start-mic"}))
+        # Start microphone (disabled: user opens mic manually)
+        # await websocket.send_text(json.dumps({"type": "control", "text": "start-mic"}))
 
     async def _init_service_context(
         self, send_text: Callable, client_uid: str
@@ -298,7 +298,11 @@ class WebSocketHandler:
         )
 
         messages = [
-            msg
+            {
+                key: value
+                for key, value in msg.items()
+                if key != "context_injections"
+            }
             for msg in get_history(
                 context.character_config.conf_uid,
                 history_uid,

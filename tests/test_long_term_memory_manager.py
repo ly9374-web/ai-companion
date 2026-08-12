@@ -243,7 +243,7 @@ class LongTermMemoryStorageTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PromptInjectionTests(unittest.TestCase):
-    def test_hidden_context_is_sent_but_not_added_to_short_memory(self):
+    def test_hidden_context_is_sent_and_saved_as_a_hidden_snapshot(self):
         agent = object.__new__(BasicMemoryAgent)
         agent._memory = []
         batch_input = BatchInput(
@@ -260,7 +260,17 @@ class PromptInjectionTests(unittest.TestCase):
         self.assertIn("今天吃什么？", request_text)
         self.assertEqual(
             agent._memory,
-            [{"role": "user", "content": "今天吃什么？"}],
+            [
+                {
+                    "role": "user",
+                    "content": "今天吃什么？",
+                    "context_injections": {
+                        "long_term_memory_context": (
+                            "[长期记忆]\n- 饮食偏好：用户不喜欢香菜。"
+                        )
+                    },
+                }
+            ],
         )
 
 

@@ -159,7 +159,7 @@ class LongTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(call_count, 3)
 
-    async def test_injects_complete_json_on_fifth_and_tenth_user_prompts(self):
+    async def test_injects_complete_json_on_first_and_every_five_turns(self):
         relationship_file = (
             '{\n  "long_term_relationship": "用户与角色是逐渐熟悉的朋友。"\n}\n'
         )
@@ -170,20 +170,21 @@ class LongTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             f"{module}.update_metadate", self.fake_update_metadata
         ):
             injections = [
-                await self.manager.consume_injection("角色", "会话")
-                for _ in range(10)
+                await self.manager.consume_injection(
+                    "角色", "会话", turn_number=turn_number
+                )
+                for turn_number in range(1, 12)
             ]
 
-        self.assertTrue(all(not value for value in injections[:4]))
-        self.assertIn(relationship_file.rstrip(), injections[4])
-        self.assertTrue(all(not value for value in injections[5:9]))
-        self.assertIn(relationship_file.rstrip(), injections[9])
-        state = self.metadata_store[LONG_TERM_RELATIONSHIP_METADATA_KEY]
-        self.assertEqual(state["user_prompt_count"], 10)
+        self.assertIn(relationship_file.rstrip(), injections[0])
+        self.assertTrue(all(not value for value in injections[1:5]))
+        self.assertIn(relationship_file.rstrip(), injections[5])
+        self.assertTrue(all(not value for value in injections[6:10]))
+        self.assertIn(relationship_file.rstrip(), injections[10])
 
 
 class RelationshipPromptInjectionTests(unittest.TestCase):
-    def test_both_hidden_contexts_are_sent_but_not_saved_to_short_memory(self):
+    def test_both_hidden_contexts_are_sent_and_saved_as_hidden_snapshots(self):
         agent = object.__new__(BasicMemoryAgent)
         agent._memory = []
         batch_input = BatchInput(
@@ -204,7 +205,18 @@ class RelationshipPromptInjectionTests(unittest.TestCase):
         self.assertIn("我们熟悉吗", request_text)
         self.assertEqual(
             agent._memory,
-            [{"role": "user", "content": "我们熟悉吗？"}],
+            [
+                {
+                    "role": "user",
+                    "content": "我们熟悉吗？",
+                    "context_injections": {
+                        "long_term_memory_context": "[长期记忆]\n- 用户喜欢咖啡。",
+                        "long_term_relationship_context": (
+                            '[长期关系]\n{"long_term_relationship":"正在建立信任。"}'
+                        ),
+                    },
+                }
+            ],
         )
 
 
@@ -231,7 +243,7 @@ class SummaryModelRoutingTests(unittest.IsolatedAsyncioTestCase):
                 },
                 llm_configs={
                     "deepseek_llm": {
-                        "model": "deepseek-v4-flash",
+                        "model": "deepseek-v4-pro",
                         "base_url": "https://example.invalid/v1",
                         "llm_api_key": "test-key",
                         "temperature": 0.7,
@@ -242,7 +254,7 @@ class SummaryModelRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             created_models,
-            ["deepseek-v4-flash", "deepseek-v4-pro"],
+            ["deepseek-v4-pro", "deepseek-v4-pro"],
         )
         self.assertIsNot(agent._llm, agent._summary_llm)
 

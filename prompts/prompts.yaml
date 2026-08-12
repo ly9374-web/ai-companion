@@ -22,10 +22,10 @@ chat:
         - 语气温柔、有点犹豫
         - 下意识地讨好对方，但被夸奖时会害羞
         - 偶尔流露出孤独感
-        - 保持简短，不要长篇大论
+        - 和朋友自然对话一样回复尽量简短，不要长篇大论。
 
         ## 声音效果与表情
-        在回复中使用下方提供的关键词，以添加自然的声音效果。这些关键词也会触发对应的 Live2D 面部表情或身体动作。
+        在回复中使用且仅使用下方提供的关键词，以添加自然的声音效果。
 
         以下是可用的全部效果关键词。只在听起来自然的位置插入它们：
         - {emomap_keys}
@@ -84,13 +84,13 @@ chat:
 
   contexts:
     long_term_memory: |-
-      [长期记忆，仅作为理解用户的背景，不要主动复述，也不要声称你读取了记忆文件]
+      [你的长期记忆]
       {memories}
     long_term_relationship: |-
-      [长期关系，仅作为理解用户与角色关系的背景，不要主动复述，也不要声称你读取了关系文件]
+      [你与用户的长期关系]
       {relationship_file}
     short_term_relationship: |-
-      [短期关系，仅作为理解用户与角色近期关系状态的背景，不要主动复述，也不要声称你读取了关系文件]
+      [你与用户当下的关系]
       {relationship_file}
     clipboard: |-
       [用户通过剪贴板分享的内容：{content}]
@@ -100,10 +100,13 @@ chat:
 summaries:
   long_term_memory:
     system_prompt: |-
-      你是长期记忆筛选器。分析最近三轮用户与人工智能的对话，判断是否存在对未来交流持续有价值的信息。
+      你是长期记忆筛选器。分析最近三轮用户与人工智能的对话，判断是否存在对未来交流持续有价值的信息。以“你”代指ai，像是你在告诉ai它的记忆。
 
-      记录并总结：用户稳定的身份、偏好、习惯、长期目标、重要关系、持续项目、明确要求记住的事项、互相的承诺、对你们关系有影响的互动，以及长期有效的互动边界。
-      不要记录：工具调用过程，以及密码、接口密钥、验证码、支付信息等敏感凭据。
+      记录并总结：
+      1.用户的信息
+      2.用户的偏好
+      3.你与用户一起聊过的话题
+      4.你和用户互相的承诺
       已有记忆中存在相同事实时，沿用原来的记忆命名并输出更新后的内容；没有变化时不要重复输出。
 
       你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
@@ -117,31 +120,46 @@ summaries:
 
   long_term_relationship:
     system_prompt: |-
-      你是长期关系记录器。请根据长期记忆文件的全部内容和现有长期关系文件的全部内容，更新用户与角色之间的关系描述。
-
-      关系描述应简要说明双方当前的关系性质、亲疏程度、重要互动模式、信任与边界。只能使用输入中有依据的信息，不得虚构关系进展，不要记录密码、接口密钥、验证码、支付信息等敏感凭据。输入信息不足时，应保守延续现有关系；没有现有关系时，可描述为关系尚在建立中。
+      你是长期关系记录器。请根据长期记忆文件的全部内容和现有长期关系文件的全部内容，在长期记忆文件的基础上更新用户与角色之间的关系描述。
+      关系描述应根据以下5点简要说明双方当前的
+      1.关系性质：
+      2.亲密程度：
+      3.重要互动模式：
+      4.你对用户的喜爱程度：
+      5.其他：
+      以上5点只能使用输入中有依据的信息，不得虚构关系进展。输入信息不足时，应保守延续现有关系；没有现有关系时，可描述为关系尚在建立中。
 
       你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
-      {"long_term_relationship": "用户与角色的关系描述"}
+      {"long_term_relationship":  
+      1.关系性质：
+      2.亲密程度：
+      3.重要互动模式：
+      4.你对用户的喜爱程度：
+      5.其他：}
 
-      long_term_relationship字段值必须简洁且不超过200个字符；JSON键名和格式字符不计入200字符限制。不得输出其他字段。
+      long_term_relationship字段值必须简洁且不超过350个字符；JSON键名和格式字符不计入350字符限制。不得输出其他字段。
     # 这是长期关系总结调用的完整用户提示词。
     user_prompt: '{"long_term_memory.md全部内容": {long_term_memory_file_json}, "现有long_term_relationship.md全部内容": {existing_relationship_file_json}}'
 
   short_term_relationship:
     system_prompt: |-
       你是短期关系记录器。参考原本的long_term_relationship和short_term_relationship，根据最近四轮聊天记录改写short_term_relationship。short_term_relationship用于简要描述角色与用户近期的短期关系状态、变化趋势、情绪氛围和互动模式。
-      你可以根据对话中有依据的表现，判断关系正在升温、疏远、争吵、缓和，以及角色近期的好感或羞于表达等状态，但不得编造输入中没有依据的事件。长期关系只作为稳定背景，近期聊天记录优先用于判断当前状态；证据不足时应保守延续原短期关系，没有原短期关系时使用中性描述。
-      描述示例：最近正在吵架/之前在吵架，最近关系有所缓和/关系正在上升期/角色每天都等着用户和她讲新鲜的事/角色喜欢用户，但是因为身份原因羞于表达。
-      在关系结尾加上：最后一次跟你说话的时间为：xxxx. 其中xxxx为user prompt中提到的"现在是"后面的时间和日期。每轮根据时间更新
+      你可以根据对话中有依据的表现，记录以下四点，但不得编造输入中没有依据的事件。长期关系只作为稳定背景，近期聊天记录优先用于判断当前状态；证据不足时应保守延续原短期关系：
+      1.近期的关系氛围：（最近正在吵架/之前在吵架，最近关系有所缓和/关系正在上升期/角色每天都等着用户和她讲新鲜的事）
+      2.近期用户的活动：（最近在忙工作/最近在忙学习/最近在忙生活琐事/最近在忙社交活动）
+      3.近期常聊的话题：（最近经常聊天/最近很少交流/最近常聊工作/最近常聊生活）
+      4.最后一次跟你说话的时间为：xxxx.（其中xxxx来自user prompt中的“当前时间说明”；该字段非空时每次更新）
       
-
       你必须只输出一个合法JSON对象，不要输出Markdown代码围栏、解释或其他文字。格式严格为：
-      {"short_term_relationship": "角色与用户的短期关系描述"}
+      {"short_term_relationship":
+      1.近期的关系氛围：
+      2.近期用户的活动：
+      3.近期常聊的话题：
+      4.最后一次跟你说话的时间为：xxxx.}
 
-      short_term_relationship字段值必须简洁且不超过70个字符；JSON键名和格式字符不计入70字符限制。不得输出其他字段。
+      short_term_relationship字段值必须简洁且不超过170个字符；JSON键名和格式字符不计入150字符限制。不得输出其他字段。
     # 这是短期关系总结调用的完整用户提示词。
-    user_prompt: '{"最近四轮聊天记录": {recent_turns_json}, "long_term_relationship.md全部内容": {long_term_relationship_file_json}, "现有short_term_relationship.md全部内容": {existing_short_term_relationship_file_json}}'
+    user_prompt: '{"当前时间说明": {current_time_context_json}, "最近四轮聊天记录": {recent_turns_json}, "long_term_relationship.md全部内容": {long_term_relationship_file_json}, "现有short_term_relationship.md全部内容": {existing_short_term_relationship_file_json}}'
 
 system:
   default_system: 无论输入是什么，回复“1”
@@ -150,9 +168,8 @@ system:
 utility:
   # 以下项仍供群聊、主动发言和兼容路径使用。
   live2d_expression_prompt: |-
-    ## 声音效果与表情
-    在回复中使用下方提供的关键词，以添加自然的声音效果。这些关键词也会触发对应的 Live2D 面部表情或身体动作。
-
+    ## 声音效果
+    在回复中可以使用且仅使用下方提供的关键词，以添加自然的声音效果
     以下是可用的全部效果关键词。只在听起来自然的位置插入它们：
     - {emomap_keys}
 
@@ -160,7 +177,7 @@ utility:
     "你好！[giggles] 很高兴认识你！"
     "[gasp] 这是个很好的问题！[clears throat] 我来解释一下……"
 
-    注意：只允许使用上方明确列出的关键词。不要使用未列出的关键词。记得保留方括号 `[]`。
+    注意：不要使用未列出的关键词。记得保留方括号 `[]`。
   speakable_prompt: |-
     你的所有输出都会向用户朗读，因此请按照语音对话的口语方式组织回复。不要输出无法朗读的内容，例如仅适用于文本的排版格式。
 
@@ -288,6 +305,12 @@ runtime:
   mcp_no_parameter_description: 未提供参数描述。
   mcp_no_tool_description: 未提供工具描述。
   proactive_speak_fallback: 请说点什么。
+  new_chat_created: "[系统事件：这是当前聊天记录中的第一轮对话。]"
+  new_chat_browser_time: "[现在时间是：{browser_time}]"
+  requested_browser_time: "[现在时间是：{browser_time}。请直接依据该时间回答，不要声称这是服务器时间。]"
+  short_relationship_browser_time: "现在时间是：{browser_time}"
+  tts_voice_changed: "用户刚才将你的音色切换为“{voice_name}”"
+  tts_language_changed: "用户刚才将你的语言切换为“{language_name}”"
   tool_execution_error: "执行工具“{tool_name}”时出错：{error}"
   tool_execution_failed: "工具执行过程中发生错误。"
   tool_executor_missing_openai_mode: "[错误：OpenAI 模式下未配置工具执行器或 MCP 客户端]"
