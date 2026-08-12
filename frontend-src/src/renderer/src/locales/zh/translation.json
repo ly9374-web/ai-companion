@@ -120,6 +120,7 @@
     "failedCapture": "捕获{{source}}帧失败",
     "failedParseWebSocket": "解析WebSocket消息失败",
     "websocketNotOpen": "WebSocket未连接",
+    "deepseekApiKeyRequired": "请先在设置 → Key 中填写 DeepSeek Key",
     "vadMisfire": "检测到语音但过于简短，请尝试提高音量或说得更久一些，或调整识别设置（降低语音识别阈值、降低负面语音阈值、减少验证帧数）"
   },
   "aiState": {

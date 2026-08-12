@@ -468,6 +468,10 @@ class ServiceContext:
 
         logger.info("Runtime API keys updated for client {}", self.client_uid)
 
+    def has_deepseek_api_key(self) -> bool:
+        """Return whether this browser session supplied a usable LLM key."""
+        return bool(self._deepseek_api_key and self._deepseek_api_key.strip())
+
     def _current_tts_preferences(self) -> tuple[str, str] | None:
         if self.character_config is None:
             return None

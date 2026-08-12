@@ -245,6 +245,13 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           duration: 2000,
         });
         break;
+      case 'api-key-required':
+        toaster.create({
+          title: t('error.deepseekApiKeyRequired'),
+          type: 'warning',
+          duration: 3000,
+        });
+        break;
       case 'backend-synth-complete':
         setBackendSynthComplete(true);
         break;

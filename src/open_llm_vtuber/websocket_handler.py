@@ -228,6 +228,21 @@ class WebSocketHandler:
             logger.warning("Message received without type")
             return
 
+        if msg_type in {"text-input", "mic-audio-end", "ai-speak-signal"}:
+            context = self.client_contexts.get(client_uid)
+            if context is not None and not context.has_deepseek_api_key():
+                if msg_type == "mic-audio-end":
+                    self.received_data_buffers[client_uid] = np.array([], dtype=np.float32)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "api-key-required",
+                            "provider": "deepseek",
+                        }
+                    )
+                )
+                return
+
         handler = self._message_handlers.get(msg_type)
         if handler:
             await handler(websocket, client_uid, data)

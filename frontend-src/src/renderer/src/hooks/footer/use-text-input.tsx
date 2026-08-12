@@ -6,8 +6,12 @@ import { useChatHistory } from '@/context/chat-history-context';
 import { useVAD } from '@/context/vad-context';
 import { useMediaCapture } from '@/hooks/utils/use-media-capture';
 import { formatBrowserTime } from '@/utils/browser-time';
+import { hasStoredDeepSeekApiKey } from '@/constants/api-keys';
+import { toaster } from '@/components/ui/toaster';
+import { useTranslation } from 'react-i18next';
 
 export function useTextInput() {
+  const { t } = useTranslation();
   const [inputText, setInputText] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const wsContext = useWebSocket();
@@ -23,6 +27,14 @@ export function useTextInput() {
 
   const handleSend = async () => {
     if (!inputText.trim() || !wsContext) return;
+    if (!hasStoredDeepSeekApiKey()) {
+      toaster.create({
+        title: t('error.deepseekApiKeyRequired'),
+        type: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
     if (aiState === 'thinking-speaking') {
       interrupt();
     }

@@ -2,13 +2,26 @@ import { useCallback } from "react";
 import { useWebSocket } from "@/context/websocket-context";
 import { useMediaCapture } from "@/hooks/utils/use-media-capture";
 import { formatBrowserTime } from "@/utils/browser-time";
+import { hasStoredDeepSeekApiKey } from "@/constants/api-keys";
+import { toaster } from "@/components/ui/toaster";
+import { useTranslation } from "react-i18next";
 
 export function useSendAudio() {
+  const { t } = useTranslation();
   const { sendMessage } = useWebSocket();
   const { captureAllMedia } = useMediaCapture();
 
   const sendAudioPartition = useCallback(
     async (audio: Float32Array) => {
+      if (!hasStoredDeepSeekApiKey()) {
+        toaster.create({
+          title: t('error.deepseekApiKeyRequired'),
+          type: 'warning',
+          duration: 3000,
+        });
+        return;
+      }
+
       const chunkSize = 4096;
 
       // Send the audio data in chunks
@@ -30,7 +43,7 @@ export function useSendAudio() {
         browser_time: formatBrowserTime(),
       });
     },
-    [sendMessage, captureAllMedia],
+    [sendMessage, captureAllMedia, t],
   );
 
   return {

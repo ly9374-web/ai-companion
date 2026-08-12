@@ -120,6 +120,7 @@
     "failedCapture": "Failed to capture {{source}} frame",
     "failedParseWebSocket": "Failed to parse WebSocket message",
     "websocketNotOpen": "WebSocket is not open.",
+    "deepseekApiKeyRequired": "Add your DeepSeek Key in Settings → Key before sending a message.",
     "vadMisfire": "Voice detected but too brief. Try speaking louder/longer, or adjust settings (lower speech threshold, lower negative threshold, reduce redemption frames)."
   },
   "aiState": {

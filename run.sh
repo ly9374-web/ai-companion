@@ -21,17 +21,23 @@ echo "[INFO] System Python version: $PYTHON_VERSION"
 if ! command -v uv &> /dev/null; then
     echo "[INFO] uv not found, installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.cargo/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 
-echo "[INFO] uv version: $(uv --version 2>/dev/null || python3 -m uv --version)"
+if ! command -v uv &> /dev/null; then
+    echo "[ERROR] uv installation finished, but the uv command is still unavailable."
+    echo "[ERROR] Reopen Terminal and run this launcher again."
+    exit 1
+fi
+
+echo "[INFO] uv version: $(uv --version)"
 
 # Setup virtual environment and install dependencies
 if [ ! -d ".venv" ]; then
     echo "[INFO] Creating virtual environment..."
-    python3 -m uv venv --directory "$(pwd)"
+    uv venv --directory "$(pwd)"
     echo "[INFO] Installing dependencies..."
-    python3 -m uv sync --directory "$(pwd)"
+    uv sync --directory "$(pwd)"
 else
     echo "[INFO] Virtual environment found, syncing dependencies..."
     uv sync --directory "$(pwd)"
@@ -94,8 +100,4 @@ trap cleanup_browser_waiter EXIT INT TERM
 BROWSER_WAITER_PID=$!
 
 # Run the server (pass through all arguments)
-if command -v uv &> /dev/null; then
-    uv run --directory "$(pwd)" run_server.py "$@"
-else
-    python3 -m uv run --directory "$(pwd)" run_server.py "$@"
-fi
+uv run --directory "$(pwd)" run_server.py "$@"

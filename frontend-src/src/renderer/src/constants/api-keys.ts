@@ -21,3 +21,7 @@ export function getStoredApiKeys(): {
     qwenApiKey: getStoredString(QWEN_API_KEY_STORAGE_KEY),
   };
 }
+
+export function hasStoredDeepSeekApiKey(): boolean {
+  return getStoredApiKeys().deepseekApiKey.trim().length > 0;
+}
