@@ -258,3 +258,7 @@ class AsyncLLM(StatelessLLMInterface):
                 logger.debug("Chat completion finished.")
                 await stream.close()
                 logger.debug("Stream closed.")
+
+    def set_api_key(self, api_key: str) -> None:
+        """Replace credentials for this in-memory client without persisting them."""
+        self.client.api_key = api_key

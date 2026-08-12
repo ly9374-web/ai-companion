@@ -71,8 +71,8 @@ def _is_first_turn(conf_uid: str, history_uid: str) -> bool:
 def _get_completed_context_turns(
     conf_uid: str,
     history_uid: str,
-) -> tuple[int, bool]:
-    """Return the unified completed-turn count and whether it already existed."""
+) -> tuple[int, int | None]:
+    """Return completed turns and the last relationship snapshot turn."""
     metadata = get_metadata(conf_uid, history_uid)
     state = metadata.get(CONTEXT_INJECTION_SCHEDULE_METADATA_KEY, {})
     if isinstance(state, dict):
@@ -82,22 +82,54 @@ def _get_completed_context_turns(
             and isinstance(completed_turns, int)
             and completed_turns >= 0
         ):
-            return completed_turns, True
+            last_injection_turn = state.get("last_relationship_injection_turn")
+            if (
+                isinstance(last_injection_turn, bool)
+                or not isinstance(last_injection_turn, int)
+                or last_injection_turn < 1
+            ):
+                last_injection_turn = None
+            return completed_turns, last_injection_turn
 
     messages = get_history(conf_uid, history_uid)
     user_turns = sum(message.get("role") == "human" for message in messages)
     assistant_turns = sum(message.get("role") == "ai" for message in messages)
     completed_turns = min(user_turns, assistant_turns)
-    update_metadate(
+    _save_context_injection_schedule(
         conf_uid,
         history_uid,
-        {
-            CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: {
-                "completed_turns": completed_turns,
-            }
-        },
+        completed_turns=completed_turns,
     )
-    return completed_turns, False
+    return completed_turns, None
+
+
+def _save_context_injection_schedule(
+    conf_uid: str,
+    history_uid: str,
+    *,
+    completed_turns: int | None = None,
+    last_relationship_injection_turn: int | None = None,
+) -> None:
+    """Persist schedule fields without discarding another schedule field."""
+    metadata = get_metadata(conf_uid, history_uid)
+    existing_state = metadata.get(CONTEXT_INJECTION_SCHEDULE_METADATA_KEY, {})
+    state = existing_state.copy() if isinstance(existing_state, dict) else {}
+    if completed_turns is not None:
+        state["completed_turns"] = completed_turns
+    if last_relationship_injection_turn is not None:
+        state["last_relationship_injection_turn"] = (
+            last_relationship_injection_turn
+        )
+
+    if not update_metadate(
+        conf_uid,
+        history_uid,
+        {CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: state},
+    ):
+        logger.error(
+            "Failed to persist unified context injection schedule for history {}",
+            history_uid,
+        )
 
 
 def _save_completed_context_turns(
@@ -106,19 +138,11 @@ def _save_completed_context_turns(
     completed_turns: int,
 ) -> None:
     """Persist the unified count after one complete user-assistant turn."""
-    if not update_metadate(
+    _save_context_injection_schedule(
         conf_uid,
         history_uid,
-        {
-            CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: {
-                "completed_turns": completed_turns,
-            }
-        },
-    ):
-        logger.error(
-            "Failed to persist unified context turn count for history {}",
-            history_uid,
-        )
+        completed_turns=completed_turns,
+    )
 
 
 async def process_single_conversation(
@@ -163,7 +187,7 @@ async def process_single_conversation(
         browser_time = request_metadata.get("browser_time", "")
         is_first_turn = False
         completed_context_turns = 0
-        context_schedule_initialized = False
+        last_relationship_injection_turn: int | None = None
         if context.history_uid and not skip_history:
             is_first_turn = _is_first_turn(
                 context.character_config.conf_uid,
@@ -171,14 +195,19 @@ async def process_single_conversation(
             )
             (
                 completed_context_turns,
-                context_schedule_initialized,
+                last_relationship_injection_turn,
             ) = _get_completed_context_turns(
                 context.character_config.conf_uid,
                 context.history_uid,
             )
 
         next_turn_number = completed_context_turns + 1
-        injection_turn_number = next_turn_number if context_schedule_initialized else 1
+        relationship_injection_interval = context.max_history_turns + 1
+        should_inject_relationships = (
+            last_relationship_injection_turn is None
+            or next_turn_number - last_relationship_injection_turn
+            >= relationship_injection_interval
+        )
 
         if is_first_turn:
             activity_lines = [prompt_builder.load_runtime_prompt("new_chat_created")]
@@ -222,27 +251,16 @@ async def process_single_conversation(
                 request_metadata["long_term_memory_context"] = (
                     long_term_memory_context
                 )
-            long_term_relationship_context = (
-                await long_term_relationship_manager.consume_injection(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    turn_number=injection_turn_number,
-                )
-            )
-            if long_term_relationship_context:
+            if should_inject_relationships:
                 request_metadata["long_term_relationship_context"] = (
-                    long_term_relationship_context
+                    await long_term_relationship_manager.read_injection(
+                        context.character_config.conf_uid
+                    )
                 )
-            short_term_relationship_context = (
-                await short_term_relationship_manager.consume_injection(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    turn_number=injection_turn_number,
-                )
-            )
-            if short_term_relationship_context:
                 request_metadata["short_term_relationship_context"] = (
-                    short_term_relationship_context
+                    await short_term_relationship_manager.read_injection(
+                        context.character_config.conf_uid
+                    )
                 )
 
         # Create batch input
@@ -271,6 +289,12 @@ async def process_single_conversation(
                 name=context.character_config.human_name,
                 context_injections=context_injections,
             )
+            if should_inject_relationships:
+                _save_context_injection_schedule(
+                    context.character_config.conf_uid,
+                    context.history_uid,
+                    last_relationship_injection_turn=next_turn_number,
+                )
 
         if skip_history:
             logger.debug("Skipping storing user input to history (proactive speak)")

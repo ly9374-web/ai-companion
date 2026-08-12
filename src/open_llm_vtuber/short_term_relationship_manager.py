@@ -23,6 +23,15 @@ from .chat_history_manager import (
 UPDATE_INTERVAL = 6
 INJECTION_INTERVAL = 6
 SHORT_TERM_RELATIONSHIP_METADATA_KEY = "short_term_relationship"
+SHORT_TERM_RELATIONSHIP_PLACEHOLDER = json.dumps(
+    {
+        "short_term_relationship": (
+            "你与用户的短期关系尚未形成，目前暂无足够的近期互动。"
+        )
+    },
+    ensure_ascii=False,
+    indent=2,
+) + "\n"
 
 
 RelationshipSummaryCallback = Callable[
@@ -199,6 +208,25 @@ class ShortTermRelationshipManager:
         async with self._get_relationship_lock(conf_uid):
             return self._read_text(relationship_path)
 
+    async def read_injection(self, conf_uid: str) -> str:
+        """Return the current relationship snapshot or an explicit placeholder."""
+        relationship_file = await self.read_relationship_file(conf_uid)
+        if relationship_file.strip():
+            try:
+                self.parse_summary(relationship_file)
+            except ValueError as exc:
+                logger.error(
+                    "Short relationship file is invalid; using placeholder instead: {}",
+                    exc,
+                )
+                relationship_file = SHORT_TERM_RELATIONSHIP_PLACEHOLDER
+        else:
+            relationship_file = SHORT_TERM_RELATIONSHIP_PLACEHOLDER
+
+        return prompt_builder.build_short_relationship_injection(
+            relationship_file
+        )
+
     async def consume_injection(
         self,
         conf_uid: str,
@@ -241,21 +269,7 @@ class ShortTermRelationshipManager:
             if not is_new_history and user_prompt_count % self.injection_interval != 0:
                 return ""
 
-        relationship_file = await self.read_relationship_file(conf_uid)
-        if not relationship_file.strip():
-            return ""
-        try:
-            self.parse_summary(relationship_file)
-        except ValueError as exc:
-            logger.error(
-                "Short relationship file is invalid and will not be injected: {}",
-                exc,
-            )
-            return ""
-
-        return prompt_builder.build_short_relationship_injection(
-            relationship_file
-        )
+        return await self.read_injection(conf_uid)
 
     async def record_completed_turn(
         self,

@@ -11,7 +11,7 @@
       "general": "常规",
       "live2d": "Live2D",
       "asr": "识别",
-      "tts": "合成",
+      "key": "Key",
       "agent": "代理",
       "rag": "RAG"
     },
@@ -43,6 +43,12 @@
     "live2d": {
       "pointerInteractive": "鼠标交互",
       "scrollToResize": "启用滚轮缩放"
+    },
+    "key": {
+      "deepseek": "DeepSeek Key",
+      "deepseekPlaceholder": "输入 DeepSeek Key",
+      "qwen": "Qwen Key",
+      "qwenPlaceholder": "输入 Qwen Key"
     },
     "asr": {
       "autoStopMic": "AI开始说话时自动关闭麦克风",

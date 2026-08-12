@@ -10,6 +10,7 @@ import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredGenerateAudio } from '@/constants/generate-audio';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
+import { getStoredApiKeys } from '@/constants/api-keys';
 
 export interface DisplayText {
   text: string;
@@ -129,6 +130,12 @@ class WebSocketService {
 
   private initializeConnection() {
     const ragSettings = getStoredRagSettings();
+    const apiKeys = getStoredApiKeys();
+    this.sendMessage({
+      type: 'set-api-keys',
+      deepseek_api_key: apiKeys.deepseekApiKey,
+      qwen_api_key: apiKeys.qwenApiKey,
+    });
     this.sendMessage({
       type: 'set-generate-audio',
       enabled: getStoredGenerateAudio(),

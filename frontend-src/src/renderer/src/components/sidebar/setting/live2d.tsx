@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { settingStyles } from './setting-styles';
 import { useLive2dSettings } from '@/hooks/sidebar/setting/use-live2d-settings';
 import { SwitchField } from './common';
+import TTS from './tts';
 
 interface live2DProps {
   onSave?: (callback: () => void) => () => void
@@ -46,6 +47,8 @@ function live2D({ onSave, onCancel }: live2DProps): JSX.Element {
         checked={modelInfo.scrollToResize ?? false}
         onChange={(checked) => handleInputChange('scrollToResize', checked)}
       />
+
+      <TTS onSave={onSave} onCancel={onCancel} />
     </Stack>
   );
 }

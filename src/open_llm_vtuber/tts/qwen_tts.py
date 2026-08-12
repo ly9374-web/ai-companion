@@ -22,7 +22,7 @@ class TTSEngine(TTSInterface):
     def __init__(
         self,
         api_url: str = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
-        api_key: SecretStr | str = "qwen的key",
+        api_key: SecretStr | str = "",
         model: str = "qwen-audio-3.0-tts-flash",
         voice: str = "qwen-audio-3.0-tts-flash-longyuyaoluan",
         language_hint: str = "en",

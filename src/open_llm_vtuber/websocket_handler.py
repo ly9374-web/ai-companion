@@ -43,6 +43,8 @@ class WSMessage(TypedDict, total=False):
     top_k: Optional[int]
     threshold: Optional[float]
     hybrid_weight: Optional[float]
+    deepseek_api_key: Optional[str]
+    qwen_api_key: Optional[str]
 
 
 class WebSocketHandler:
@@ -78,6 +80,7 @@ class WebSocketHandler:
             "set-generate-audio": self._handle_set_generate_audio,
             "set-max-history-turns": self._handle_set_max_history_turns,
             "set-rag-options": self._handle_set_rag_options,
+            "set-api-keys": self._handle_set_api_keys,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
             "heartbeat": self._handle_heartbeat,
@@ -488,6 +491,23 @@ class WebSocketHandler:
                 ensure_ascii=False,
             )
         )
+
+    async def _handle_set_api_keys(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Apply browser-stored API keys to this client session only."""
+        deepseek_api_key = data.get("deepseek_api_key")
+        qwen_api_key = data.get("qwen_api_key")
+        if not isinstance(deepseek_api_key, str) or len(deepseek_api_key) > 4096:
+            raise ValueError("Invalid DeepSeek API key")
+        if not isinstance(qwen_api_key, str) or len(qwen_api_key) > 4096:
+            raise ValueError("Invalid Qwen API key")
+
+        self.client_contexts[client_uid].set_runtime_api_keys(
+            deepseek_api_key=deepseek_api_key.strip(),
+            qwen_api_key=qwen_api_key.strip(),
+        )
+        await websocket.send_text(json.dumps({"type": "api-keys-updated"}))
 
     async def _handle_set_generate_audio(
         self, websocket: WebSocket, client_uid: str, data: WSMessage

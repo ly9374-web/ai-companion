@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Callable
+from typing import Any, Callable
 from loguru import logger
 from fastapi import WebSocket
 
@@ -77,6 +77,39 @@ class ServiceContext:
         self.rag_hybrid_weight: float = 0.5
         self._ai_known_tts_preferences: tuple[str, str] | None = None
         self._tts_preference_change_pending: bool = False
+        self._deepseek_api_key: str | None = None
+        self._qwen_api_key: str | None = None
+
+    @staticmethod
+    def _redact_api_keys(data: Any) -> Any:
+        """Return a copy of *data* with ``llm_api_key`` and ``api_key`` values
+        replaced by ``<REDACTED>`` so they never appear in debug output."""
+        if isinstance(data, dict):
+            return {
+                key: (
+                    "<REDACTED>"
+                    if key in ("llm_api_key", "api_key")
+                    else ServiceContext._redact_api_keys(value)
+                )
+                for key, value in data.items()
+            }
+        if isinstance(data, list):
+            return [ServiceContext._redact_api_keys(value) for value in data]
+        if isinstance(data, tuple):
+            return tuple(ServiceContext._redact_api_keys(value) for value in data)
+        return data
+
+    def _safe_agent_config_dump(self) -> dict:
+        """Return the agent config dict with any API keys redacted."""
+        if not self.character_config or not self.character_config.agent_config:
+            return {}
+        return self._redact_api_keys(self.character_config.agent_config.model_dump())
+
+    def _safe_character_config_dump(self) -> dict:
+        """Return the character config dict with any API keys redacted."""
+        if not self.character_config:
+            return {}
+        return self._redact_api_keys(self.character_config.model_dump())
 
     def __str__(self):
         return (
@@ -89,7 +122,7 @@ class ServiceContext:
             f"  TTS Engine: {type(self.tts_engine).__name__ if self.tts_engine else 'Not Loaded'}\n"
             f"    Config: {json.dumps(self.character_config.tts_config.model_dump(), indent=6, default=str) if self.character_config.tts_config else 'None'}\n"
             f"  LLM Engine: {type(self.agent_engine).__name__ if self.agent_engine else 'Not Loaded'}\n"
-            f"    Agent Config: {json.dumps(self.character_config.agent_config.model_dump(), indent=6) if self.character_config.agent_config else 'None'}\n"
+            f"    Agent Config: {json.dumps(self._safe_agent_config_dump(), indent=6)}\n"
             f"  VAD Engine: {type(self.vad_engine).__name__ if self.vad_engine else 'Not Loaded'}\n"
             f"    Agent Config: {json.dumps(self.character_config.vad_config.model_dump(), indent=6) if self.character_config.vad_config else 'None'}\n"
             f"  System Prompt: {self.system_prompt or 'Not Set'}\n"
@@ -255,7 +288,10 @@ class ServiceContext:
             )
 
         self.sync_ai_tts_preferences()
-        logger.debug(f"Loaded service context with cache: {character_config}")
+        logger.debug(
+            f"Loaded service context with cache: "
+            f"{json.dumps(self._redact_api_keys(character_config.model_dump()), indent=2)}"
+        )
 
     async def load_from_config(self, config: Config) -> None:
         """Load the ServiceContext with the config."""
@@ -328,9 +364,14 @@ class ServiceContext:
     def init_tts(self, tts_config: TTSConfig) -> None:
         if not self.tts_engine or (self.character_config.tts_config != tts_config):
             logger.info(f"Initializing TTS: {tts_config.tts_model}")
+            tts_options = getattr(
+                tts_config, tts_config.tts_model.lower()
+            ).model_dump()
+            if self._qwen_api_key is not None:
+                tts_options["api_key"] = self._qwen_api_key
             self.tts_engine = TTSFactory.get_tts_engine(
                 tts_config.tts_model,
-                **getattr(tts_config, tts_config.tts_model.lower()).model_dump(),
+                **tts_options,
             )
             self.character_config.tts_config = tts_config
         else:
@@ -386,9 +427,10 @@ class ServiceContext:
         updated_tts_config = tts_config.model_copy(
             deep=True, update={"qwen_tts": qwen_config}
         )
-        self.tts_engine = TTSFactory.get_tts_engine(
-            "qwen_tts", **qwen_config.model_dump()
-        )
+        qwen_options = qwen_config.model_dump()
+        if self._qwen_api_key is not None:
+            qwen_options["api_key"] = self._qwen_api_key
+        self.tts_engine = TTSFactory.get_tts_engine("qwen_tts", **qwen_options)
         self.character_config.tts_config = updated_tts_config
         if self.config and self.config.character_config:
             self.config.character_config.tts_config = updated_tts_config.model_copy(
@@ -399,6 +441,32 @@ class ServiceContext:
         elif notify_ai:
             self._tts_preference_change_pending = True
         logger.info("Qwen TTS options updated for client {}", self.client_uid)
+
+    def set_runtime_api_keys(
+        self,
+        *,
+        deepseek_api_key: str,
+        qwen_api_key: str,
+    ) -> None:
+        """Apply browser-provided credentials to this session without persistence."""
+        self._deepseek_api_key = deepseek_api_key
+        self._qwen_api_key = qwen_api_key
+
+        if self.agent_engine is not None:
+            for attribute in ("_llm", "_summary_llm"):
+                llm = getattr(self.agent_engine, attribute, None)
+                if llm is not None and hasattr(llm, "set_api_key"):
+                    llm.set_api_key(deepseek_api_key)
+
+        tts_config = self.character_config.tts_config
+        if tts_config.tts_model == "qwen_tts" and tts_config.qwen_tts is not None:
+            qwen_options = tts_config.qwen_tts.model_dump()
+            qwen_options["api_key"] = qwen_api_key
+            self.tts_engine = TTSFactory.get_tts_engine(
+                "qwen_tts", **qwen_options
+            )
+
+        logger.info("Runtime API keys updated for client {}", self.client_uid)
 
     def _current_tts_preferences(self) -> tuple[str, str] | None:
         if self.character_config is None:
@@ -492,10 +560,22 @@ class ServiceContext:
         avatar = self.character_config.avatar or ""
 
         try:
+            llm_configs = agent_config.llm_configs.model_dump()
+            deepseek_config = llm_configs.get("deepseek_llm")
+            if deepseek_config is not None:
+                if self._deepseek_api_key is not None:
+                    deepseek_config["llm_api_key"] = self._deepseek_api_key
+                elif not deepseek_config.get("llm_api_key"):
+                    # Browser-managed credentials arrive only after the WebSocket
+                    # opens.  The OpenAI client rejects an empty key during server
+                    # startup, so use a non-secret placeholder until the browser
+                    # immediately replaces it for this in-memory session.
+                    deepseek_config["llm_api_key"] = "runtime-key-pending"
+
             self.agent_engine = AgentFactory.create_agent(
                 conversation_agent_choice=agent_config.conversation_agent_choice,
                 agent_settings=agent_config.agent_settings.model_dump(),
-                llm_configs=agent_config.llm_configs.model_dump(),
+                llm_configs=llm_configs,
                 system_prompt=system_prompt,
                 live2d_model=self.live2d_model,
                 tts_preprocessor_config=self.character_config.tts_preprocessor_config,
@@ -643,7 +723,8 @@ class ServiceContext:
                 await self.load_from_config(new_config)
                 logger.debug(f"New config: {self}")
                 logger.debug(
-                    f"New character config: {self.character_config.model_dump()}"
+                    f"New character config: "
+                    f"{json.dumps(self._safe_character_config_dump(), indent=2)}"
                 )
 
                 await websocket.send_text(
