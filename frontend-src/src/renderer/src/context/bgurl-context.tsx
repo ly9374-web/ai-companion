@@ -26,8 +26,6 @@ export interface BgUrlContextState {
   addBackgroundFile: (file: BackgroundFile) => void;
   removeBackgroundFile: (name: string) => void;
   isDefaultBackground: boolean;
-  useCameraBackground: boolean;
-  setUseCameraBackground: (use: boolean) => void;
 }
 
 /**
@@ -74,8 +72,6 @@ export function BgUrlProvider({ children }: { children: React.ReactNode }) {
     [backgroundUrl, DEFAULT_BACKGROUND],
   );
 
-  const [useCameraBackground, setUseCameraBackground] = useState<boolean>(false);
-
   // Memoized context value
   const contextValue = useMemo(() => ({
     backgroundUrl,
@@ -86,9 +82,7 @@ export function BgUrlProvider({ children }: { children: React.ReactNode }) {
     addBackgroundFile,
     removeBackgroundFile,
     isDefaultBackground,
-    useCameraBackground,
-    setUseCameraBackground,
-  }), [backgroundUrl, setBackgroundUrl, backgroundFiles, resetBackground, addBackgroundFile, removeBackgroundFile, isDefaultBackground, useCameraBackground]);
+  }), [backgroundUrl, setBackgroundUrl, backgroundFiles, resetBackground, addBackgroundFile, removeBackgroundFile, isDefaultBackground]);
 
   return (
     <BgUrlContext.Provider value={contextValue}>

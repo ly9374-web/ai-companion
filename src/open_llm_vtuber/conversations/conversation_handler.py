@@ -9,6 +9,7 @@ from loguru import logger
 
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
+from ..optional_features import build_optional_request_context
 from .single_conversation import process_single_conversation
 from .conversation_utils import EMOJI_LIST
 from prompts import prompt_builder, prompt_loader
@@ -81,6 +82,14 @@ async def handle_conversation_trigger(
         else:
             metadata = None
             logger.warning("Missing or invalid browser time for {}", msg_type)
+
+        optional_feature_context = build_optional_request_context(
+            data.get("optional_contexts")
+        )
+        if optional_feature_context:
+            metadata = dict(metadata or {})
+            metadata["optional_feature_context"] = optional_feature_context
+            logger.info("Optional feature context added:\n{}", optional_feature_context)
 
     images = data.get("images")
     session_emoji = np.random.choice(EMOJI_LIST)

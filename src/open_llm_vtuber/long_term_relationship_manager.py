@@ -70,6 +70,8 @@ class LongTermRelationshipManager:
         )
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._relationship_locks: dict[str, asyncio.Lock] = {}
+        self._update_locks: dict[str, asyncio.Lock] = {}
+        self._summary_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def _get_history_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
         key = (conf_uid, history_uid)
@@ -104,6 +106,22 @@ class LongTermRelationshipManager:
         if lock is None:
             lock = asyncio.Lock()
             self._relationship_locks[key] = lock
+        return lock
+
+    def _get_update_lock(self, conf_uid: str) -> asyncio.Lock:
+        key = conf_uid if self.relationship_path is None else "__fixed__"
+        lock = self._update_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._update_locks[key] = lock
+        return lock
+
+    def _get_summary_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
+        key = (conf_uid, history_uid)
+        lock = self._summary_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._summary_locks[key] = lock
         return lock
 
     @staticmethod
@@ -333,6 +351,28 @@ class LongTermRelationshipManager:
         summarize: RelationshipSummaryCallback,
     ) -> bool:
         """Count turns and update the relationship after every six."""
+        should_summarize = await self.record_turn(
+            conf_uid,
+            history_uid,
+            user_content,
+            assistant_content,
+        )
+        if not should_summarize:
+            return False
+        return await self.summarize_pending_update(
+            conf_uid,
+            history_uid,
+            summarize,
+        )
+
+    async def record_turn(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> bool:
+        """Persist one completed-turn count and report whether a batch is ready."""
         if not conf_uid or not history_uid:
             return False
 
@@ -351,7 +391,7 @@ class LongTermRelationshipManager:
                 pending_turns = (
                     len(legacy_turns) if isinstance(legacy_turns, list) else 0
                 )
-            pending_turns = (pending_turns % self.update_interval) + 1
+            pending_turns += 1
             state["pending_update_turns"] = pending_turns
             state.pop("pending_turns", None)
             state.setdefault("user_prompt_count", 0)
@@ -362,64 +402,97 @@ class LongTermRelationshipManager:
                 )
                 return False
 
-            if pending_turns < self.update_interval:
-                return False
+            return pending_turns >= self.update_interval
 
-            relationship_path = self._get_relationship_path(conf_uid)
-            short_term_relationship_path = (
-                self._get_short_term_relationship_path(conf_uid)
+    async def summarize_pending_update(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: RelationshipSummaryCallback,
+    ) -> bool:
+        """Update the relationship for one recorded batch without losing new counts."""
+        async with self._get_summary_lock(conf_uid, history_uid):
+            return await self._summarize_pending_update_unlocked(
+                conf_uid,
+                history_uid,
+                summarize,
             )
-            memories = await self._memory_manager.read_memories(conf_uid)
-            memory_contents, max_count = self._select_memory_contents(memories)
-            logger.info(
-                "Long-term relationship memory input: total={} selected={} "
-                "max_count={} content_only=true",
-                len(memories),
-                len(memory_contents),
-                max_count,
-            )
+
+    async def _summarize_pending_update_unlocked(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: RelationshipSummaryCallback,
+    ) -> bool:
+        """Process one batch while the per-history summary lock is held."""
+        state = self._get_state(conf_uid, history_uid)
+        pending_turns = state.get("pending_update_turns", 0)
+        if (
+            isinstance(pending_turns, bool)
+            or not isinstance(pending_turns, int)
+            or pending_turns < self.update_interval
+        ):
+            return False
+
+        relationship_path = self._get_relationship_path(conf_uid)
+        short_term_relationship_path = self._get_short_term_relationship_path(conf_uid)
+        memories = await self._memory_manager.read_memories(conf_uid)
+        memory_contents, max_count = self._select_memory_contents(memories)
+        logger.info(
+            "Long-term relationship memory input: total={} selected={} "
+            "max_count={} content_only=true",
+            len(memories),
+            len(memory_contents),
+            max_count,
+        )
+        async with self._get_update_lock(conf_uid):
             async with self._get_relationship_lock(conf_uid):
                 relationship_file = self._read_text(relationship_path)
                 short_term_relationship_file = self._read_text(
                     short_term_relationship_path
                 )
-                try:
-                    raw_output = await summarize(
-                        memory_contents,
-                        relationship_file,
-                        short_term_relationship_file,
-                    )
-                    relationship = self.parse_summary(raw_output)
-                    relationship = self._apply_memory_count(
-                        relationship,
-                        max_count,
-                    )
+            try:
+                raw_output = await summarize(
+                    memory_contents,
+                    relationship_file,
+                    short_term_relationship_file,
+                )
+                relationship = self._apply_memory_count(
+                    self.parse_summary(raw_output),
+                    max_count,
+                )
+                async with self._get_relationship_lock(conf_uid):
                     self._write_relationship_unlocked(
                         relationship_path, relationship
                     )
-                except Exception as exc:
-                    state["pending_update_turns"] = 0
-                    self._save_state(conf_uid, history_uid, state)
-                    logger.error(
-                        "Long-term relationship update failed for history {}: {}",
-                        history_uid,
-                        exc,
-                    )
-                    return False
+            except Exception as exc:
+                logger.error(
+                    "Long-term relationship update failed for history {}: {}",
+                    history_uid,
+                    exc,
+                )
+                return False
 
-            state["pending_update_turns"] = 0
-            if not self._save_state(conf_uid, history_uid, state):
+        async with self._get_history_lock(conf_uid, history_uid):
+            latest_state = self._get_state(conf_uid, history_uid)
+            latest_pending = latest_state.get("pending_update_turns", 0)
+            if isinstance(latest_pending, bool) or not isinstance(latest_pending, int):
+                latest_pending = 0
+            latest_state["pending_update_turns"] = max(
+                0, latest_pending - self.update_interval
+            )
+            if not self._save_state(conf_uid, history_uid, latest_state):
                 logger.error(
                     "Relationship was saved but its history checkpoint failed for {}",
                     history_uid,
                 )
                 return False
 
-            logger.info(
-                "Long-term relationship processed {} completed turns",
-                self.update_interval,
-            )
-            return True
+        logger.info(
+            "Long-term relationship processed {} completed turns",
+            self.update_interval,
+        )
+        return True
 
 
 long_term_relationship_manager = LongTermRelationshipManager()

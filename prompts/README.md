@@ -5,7 +5,7 @@
 打开该 YAML 后可直接修改：
 
 - `chat.characters.algernon.system_prompt`：Algernon 完整 system prompt。
-- `chat.characters.mili.system_prompt`：Mili 完整 system prompt。
+- `chat.characters.cuige.system_prompt`：崔格完整 system prompt。
 - `chat.user_prompt`：普通聊天当轮完整 user prompt 结构。
 - `chat.contexts`：长期记忆、长期关系和短期关系的包装文本与插入位置。
 - `summaries`：三种总结调用各自完整的 system prompt 和 user prompt。

@@ -5,6 +5,7 @@ import { formatBrowserTime } from "@/utils/browser-time";
 import { hasStoredDeepSeekApiKey } from "@/constants/api-keys";
 import { toaster } from "@/components/ui/toaster";
 import { useTranslation } from "react-i18next";
+import { optionalFeature } from "@optional-feature";
 
 export function useSendAudio() {
   const { t } = useTranslation();
@@ -22,6 +23,8 @@ export function useSendAudio() {
         return;
       }
 
+      const optionalContexts = optionalFeature.consumeForUserMessage();
+
       const chunkSize = 4096;
 
       // Send the audio data in chunks
@@ -35,12 +38,14 @@ export function useSendAudio() {
         });
       }
 
-      // Send end signal after all chunks
       const images = await captureAllMedia();
       sendMessage({
         type: "mic-audio-end",
         images,
         browser_time: formatBrowserTime(),
+        ...(optionalContexts ? {
+          optional_contexts: optionalContexts,
+        } : {}),
       });
     },
     [sendMessage, captureAllMedia, t],

@@ -16,10 +16,7 @@ import {
   MAX_MAX_HISTORY_TURNS,
   MIN_MAX_HISTORY_TURNS,
 } from "@/constants/max-history-turns";
-import {
-  GENERATE_AUDIO_STORAGE_KEY,
-  getStoredGenerateAudio,
-} from "@/constants/generate-audio";
+import { OptionalGeneralSettings } from "@optional-feature";
 
 interface GeneralProps {
   onSave?: (callback: () => void) => () => void;
@@ -78,14 +75,22 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     wsState,
   } = useWebSocket();
   const collections = useCollections();
-  const [generateAudio, setGenerateAudio] = useState(getStoredGenerateAudio);
+  const [generateAudio, setGenerateAudio] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
 
   const handleGenerateAudioChange = (enabled: boolean): void => {
     setGenerateAudio(enabled);
-    localStorage.setItem(GENERATE_AUDIO_STORAGE_KEY, JSON.stringify(enabled));
 
     if (wsState === "OPEN") {
       sendMessage({ type: "set-generate-audio", enabled });
+    }
+  };
+
+  const handleDebugModeChange = (enabled: boolean): void => {
+    setDebugMode(enabled);
+
+    if (wsState === "OPEN") {
+      sendMessage({ type: "set-debug-mode", enabled });
     }
   };
 
@@ -118,7 +123,6 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
   const {
     settings,
     handleSettingChange,
-    handleCameraToggle,
     handleCharacterPresetChange,
   } = useGeneralSettings({
     bgUrlContext,
@@ -175,11 +179,7 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         help={t("settings.general.generateAudioHelp")}
       />
 
-      <SwitchField
-        label={t("settings.general.useCameraBackground")}
-        checked={settings.useCameraBackground}
-        onChange={handleCameraToggle}
-      />
+      <OptionalGeneralSettings onSave={onSave} onCancel={onCancel} />
 
       <SelectField
         label={t("settings.general.characterPreset")}
@@ -207,6 +207,13 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         step={1}
         allowMouseWheel
         help={t("settings.general.maxHistoryTurnsHelp")}
+      />
+
+      <SwitchField
+        label={t("settings.general.debugMode")}
+        checked={debugMode}
+        onChange={handleDebugModeChange}
+        help={t("settings.general.debugModeHelp")}
       />
     </Stack>
   );

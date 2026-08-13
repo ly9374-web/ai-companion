@@ -108,7 +108,7 @@ const SidebarContent = memo(({
   onNewHistory, 
   setMode, 
   currentMode,
-  isElectron
+  isElectron,
 }: HeaderButtonsProps) => (
   <Box {...sidebarStyles.sidebar.content}>
     <Box {...sidebarStyles.sidebar.header}>

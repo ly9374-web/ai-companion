@@ -67,6 +67,8 @@ class ShortTermRelationshipManager:
         self.injection_interval = injection_interval
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._relationship_locks: dict[str, asyncio.Lock] = {}
+        self._update_locks: dict[str, asyncio.Lock] = {}
+        self._summary_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def _get_history_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
         key = (conf_uid, history_uid)
@@ -96,6 +98,22 @@ class ShortTermRelationshipManager:
         if lock is None:
             lock = asyncio.Lock()
             self._relationship_locks[key] = lock
+        return lock
+
+    def _get_update_lock(self, conf_uid: str) -> asyncio.Lock:
+        key = conf_uid if self.relationship_path is None else "__fixed__"
+        lock = self._update_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._update_locks[key] = lock
+        return lock
+
+    def _get_summary_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
+        key = (conf_uid, history_uid)
+        lock = self._summary_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._summary_locks[key] = lock
         return lock
 
     @staticmethod
@@ -281,6 +299,32 @@ class ShortTermRelationshipManager:
         browser_time: str = "",
     ) -> bool:
         """Record a turn and rewrite the short relationship from the latest six."""
+        should_summarize = await self.record_turn(
+            conf_uid,
+            history_uid,
+            user_content,
+            assistant_content,
+        )
+        if not should_summarize:
+            return False
+        return (
+            await self.summarize_pending_turns(
+                conf_uid,
+                history_uid,
+                summarize,
+                browser_time,
+            )
+            == "success"
+        )
+
+    async def record_turn(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> bool:
+        """Persist one completed turn and report whether a batch is ready."""
         if not conf_uid or not history_uid:
             return False
 
@@ -294,12 +338,9 @@ class ShortTermRelationshipManager:
             pending_turns = state.get("pending_turns", [])
             if not isinstance(pending_turns, list):
                 pending_turns = []
-            if len(pending_turns) >= self.update_interval:
-                pending_turns = []
             pending_turns.append(
                 {"user": user_content, "assistant": assistant_content}
             )
-            pending_turns = pending_turns[-self.update_interval :]
             state["pending_turns"] = pending_turns
             state.setdefault("user_prompt_count", 0)
             if not self._save_state(conf_uid, history_uid, state):
@@ -309,14 +350,59 @@ class ShortTermRelationshipManager:
                 )
                 return False
 
-            if len(pending_turns) < self.update_interval:
-                return False
+            return len(pending_turns) >= self.update_interval
 
-            latest_turns = pending_turns[-self.update_interval :]
-            relationship_path = self._get_relationship_path(conf_uid)
-            long_term_relationship_path = (
-                self._get_long_term_relationship_path(conf_uid)
+    async def summarize_pending_turns(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: RelationshipSummaryCallback,
+        browser_time: str = "",
+        require_full_batch: bool = False,
+    ) -> str:
+        """Rewrite the short relationship from all pending completed turns."""
+        if not conf_uid or not history_uid:
+            return "empty"
+
+        async with self._get_summary_lock(conf_uid, history_uid):
+            return await self._summarize_pending_turns_unlocked(
+                conf_uid,
+                history_uid,
+                summarize,
+                browser_time,
+                require_full_batch,
             )
+
+    async def _summarize_pending_turns_unlocked(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: RelationshipSummaryCallback,
+        browser_time: str,
+        require_full_batch: bool,
+    ) -> str:
+        """Process one pending batch while the per-history summary lock is held."""
+
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            pending_turns = state.get("pending_turns", [])
+            if not isinstance(pending_turns, list):
+                pending_turns = []
+            latest_turns = (
+                pending_turns[: self.update_interval]
+                if require_full_batch
+                else pending_turns[:]
+            )
+            if not latest_turns:
+                return "empty"
+            if require_full_batch and len(latest_turns) < self.update_interval:
+                return "empty"
+
+        relationship_path = self._get_relationship_path(conf_uid)
+        long_term_relationship_path = self._get_long_term_relationship_path(
+            conf_uid
+        )
+        async with self._get_update_lock(conf_uid):
             async with self._get_relationship_lock(conf_uid):
                 long_term_relationship_file = self._read_text(
                     long_term_relationship_path
@@ -324,40 +410,44 @@ class ShortTermRelationshipManager:
                 short_term_relationship_file = self._read_text(
                     relationship_path
                 )
-                try:
-                    raw_output = await summarize(
-                        latest_turns,
-                        long_term_relationship_file,
-                        short_term_relationship_file,
-                        browser_time,
-                    )
-                    relationship = self.parse_summary(raw_output)
+            try:
+                raw_output = await summarize(
+                    latest_turns,
+                    long_term_relationship_file,
+                    short_term_relationship_file,
+                    browser_time,
+                )
+                relationship = self.parse_summary(raw_output)
+                async with self._get_relationship_lock(conf_uid):
                     self._write_relationship_unlocked(
                         relationship_path, relationship
                     )
-                except Exception as exc:
-                    state["pending_turns"] = []
-                    self._save_state(conf_uid, history_uid, state)
-                    logger.error(
-                        "Short-term relationship update failed for history {}: {}",
-                        history_uid,
-                        exc,
-                    )
-                    return False
+            except Exception as exc:
+                logger.error(
+                    "Manual short-term relationship update failed for history {}: {}",
+                    history_uid,
+                    exc,
+                )
+                return "error"
 
-            state["pending_turns"] = []
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            latest_pending = state.get("pending_turns", [])
+            if not isinstance(latest_pending, list):
+                latest_pending = []
+            state["pending_turns"] = latest_pending[len(latest_turns) :]
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
-                    "Short relationship was saved but its checkpoint failed for {}",
+                    "Manual short relationship was saved but its checkpoint failed for {}",
                     history_uid,
                 )
-                return False
+                return "error"
 
-            logger.info(
-                "Short-term relationship processed the latest {} completed turns",
-                self.update_interval,
-            )
-            return True
+        logger.info(
+            "Short-term relationship summary processed {} pending turns",
+            len(latest_turns),
+        )
+        return "success"
 
 
 short_term_relationship_manager = ShortTermRelationshipManager()

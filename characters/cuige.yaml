@@ -1,10 +1,10 @@
 
 
 character_config:
-  conf_name: "Mili"
-  conf_uid: "mili_preset_001"
-  character_name: "Mili"
-  persona_prompt_file: "mili"
+  conf_name: "崔格"
+  conf_uid: "cuige_preset_001"
+  character_name: "崔格"
+  persona_prompt_file: "cuige"
 
 # you may add more custom settings
 # refer to the main conf.yaml for available settings

@@ -6,6 +6,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/renderer/src/*"],
+      "@optional-feature": ["src/renderer/src/optional-feature-stub.tsx"],
       "@framework/*": ["src/renderer/WebSDK/Framework/src/*"],
       "@cubismsdksamples/*": ["src/renderer/WebSDK/src/*"],
       "@motionsyncframework/*": ["src/renderer/WebSDK/src/Framework/src/*"],

@@ -11,7 +11,7 @@ import { SubtitleProvider } from "./context/subtitle-context";
 import { BgUrlProvider } from "./context/bgurl-context";
 import { layoutStyles } from "./layout";
 import WebSocketHandler from "./services/websocket-handler";
-import { CameraProvider } from "./context/camera-context";
+import { OptionalFeatureProvider } from "@optional-feature";
 import { ChatHistoryProvider } from "./context/chat-history-context";
 import { CharacterConfigProvider } from "./context/character-config-context";
 import { Toaster } from "./components/ui/toaster";
@@ -28,6 +28,7 @@ import Background from "./components/canvas/background";
 import WebSocketStatus from "./components/canvas/ws-status";
 import { ModeProvider, useMode } from "./context/mode-context";
 import { useSpaceToTalk } from "./hooks/utils/use-space-to-talk";
+import { useManualSummary } from "./hooks/utils/use-manual-summary";
 
 function AppContent(): JSX.Element {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -36,6 +37,7 @@ function AppContent(): JSX.Element {
   const isElectron = window.api !== undefined;
   const live2dContainerRef = useRef<HTMLDivElement>(null);
   useSpaceToTalk();
+  useManualSummary();
 
   useEffect(() => {
     const handleResize = () => {
@@ -160,7 +162,7 @@ function App(): JSX.Element {
 function AppWithGlobalStyles(): JSX.Element {
   return (
     <>
-      <CameraProvider>
+      <OptionalFeatureProvider>
         <ScreenCaptureProvider>
           <CharacterConfigProvider>
             <ChatHistoryProvider>
@@ -185,7 +187,7 @@ function AppWithGlobalStyles(): JSX.Element {
             </ChatHistoryProvider>
           </CharacterConfigProvider>
         </ScreenCaptureProvider>
-      </CameraProvider>
+      </OptionalFeatureProvider>
     </>
   );
 }

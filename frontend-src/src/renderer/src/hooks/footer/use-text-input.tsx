@@ -6,6 +6,7 @@ import { useChatHistory } from '@/context/chat-history-context';
 import { useVAD } from '@/context/vad-context';
 import { useMediaCapture } from '@/hooks/utils/use-media-capture';
 import { formatBrowserTime } from '@/utils/browser-time';
+import { optionalFeature } from '@optional-feature';
 import { hasStoredDeepSeekApiKey } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
@@ -39,6 +40,8 @@ export function useTextInput() {
       interrupt();
     }
 
+    const optionalContexts = optionalFeature.consumeForUserMessage();
+
     const images = await captureAllMedia();
 
     appendHumanMessage(inputText.trim());
@@ -47,6 +50,9 @@ export function useTextInput() {
       text: inputText.trim(),
       images,
       browser_time: formatBrowserTime(),
+      ...(optionalContexts ? {
+        optional_contexts: optionalContexts,
+      } : {}),
     });
 
     if (autoStopMic) stopMic();

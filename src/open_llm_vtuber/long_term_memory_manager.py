@@ -67,6 +67,7 @@ class LongTermMemoryManager:
         self.max_memories = max_memories
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._memory_locks: dict[str, asyncio.Lock] = {}
+        self._summary_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def _get_history_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
         key = (conf_uid, history_uid)
@@ -89,6 +90,14 @@ class LongTermMemoryManager:
         if lock is None:
             lock = asyncio.Lock()
             self._memory_locks[key] = lock
+        return lock
+
+    def _get_summary_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
+        key = (conf_uid, history_uid)
+        lock = self._summary_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._summary_locks[key] = lock
         return lock
 
     @staticmethod
@@ -459,6 +468,31 @@ class LongTermMemoryManager:
         summarize: SummaryCallback,
     ) -> bool:
         """Record one new single-chat turn and summarize each new group of six."""
+        should_summarize = await self.record_turn(
+            conf_uid,
+            history_uid,
+            user_content,
+            assistant_content,
+        )
+        if not should_summarize:
+            return False
+        return (
+            await self.summarize_pending_turns(
+                conf_uid,
+                history_uid,
+                summarize,
+            )
+            == "success"
+        )
+
+    async def record_turn(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> bool:
+        """Persist one completed turn and report whether a new batch is ready."""
         if not conf_uid or not history_uid:
             return False
 
@@ -472,13 +506,9 @@ class LongTermMemoryManager:
             pending_turns = state.get("pending_turns", [])
             if not isinstance(pending_turns, list):
                 pending_turns = []
-            if len(pending_turns) >= self.summary_interval:
-                pending_turns = []
-
             pending_turns.append(
                 {"user": user_content, "assistant": assistant_content}
             )
-            pending_turns = pending_turns[-self.summary_interval :]
             state["pending_turns"] = pending_turns
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
@@ -487,55 +517,97 @@ class LongTermMemoryManager:
                 )
                 return False
 
-            if len(pending_turns) < self.summary_interval:
-                return False
+            return len(pending_turns) >= self.summary_interval
 
-            summary_turns = pending_turns[-self.summary_interval :]
-            new_memories: list[LongTermMemory] | None = None
-            last_format_error: ValueError | None = None
-            for _ in range(3):
-                raw_output = await summarize(summary_turns)
-                try:
-                    new_memories = self.parse_summary(raw_output)
-                    break
-                except ValueError as exc:
-                    last_format_error = exc
+    async def summarize_pending_turns(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: SummaryCallback,
+        require_full_batch: bool = False,
+    ) -> str:
+        """Summarize all currently pending completed turns on demand."""
+        if not conf_uid or not history_uid:
+            return "empty"
 
-            if new_memories is None:
-                state["pending_turns"] = []
-                self._save_state(conf_uid, history_uid, state)
-                logger.error(
-                    "Long-term memory summarization failed for history {} after "
-                    "3 format attempts: {}",
-                    history_uid,
-                    last_format_error,
-                )
-                return False
+        async with self._get_summary_lock(conf_uid, history_uid):
+            return await self._summarize_pending_turns_unlocked(
+                conf_uid,
+                history_uid,
+                summarize,
+                require_full_batch,
+            )
 
+    async def _summarize_pending_turns_unlocked(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        summarize: SummaryCallback,
+        require_full_batch: bool,
+    ) -> str:
+        """Process one pending batch while the per-history summary lock is held."""
+
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            pending_turns = state.get("pending_turns", [])
+            if not isinstance(pending_turns, list):
+                pending_turns = []
+            summary_turns = (
+                pending_turns[: self.summary_interval]
+                if require_full_batch
+                else pending_turns[:]
+            )
+            if not summary_turns:
+                return "empty"
+            if require_full_batch and len(summary_turns) < self.summary_interval:
+                return "empty"
+
+        new_memories: list[LongTermMemory] | None = None
+        last_error: Exception | None = None
+        for _ in range(3):
             try:
-                stored_memories = await self.store_memories(new_memories, conf_uid)
+                raw_output = await summarize(summary_turns)
+                new_memories = self.parse_summary(raw_output)
+                break
             except Exception as exc:
-                logger.error(
-                    "Long-term memory summarization failed for history {}: {}",
-                    history_uid,
-                    exc,
-                )
-                return False
+                last_error = exc
 
-            state["pending_turns"] = pending_turns[self.summary_interval :]
+        if new_memories is None:
+            logger.error(
+                "Manual long-term memory summary failed for history {}: {}",
+                history_uid,
+                last_error,
+            )
+            return "error"
+
+        try:
+            await self.store_memories(new_memories, conf_uid)
+        except Exception as exc:
+            logger.error(
+                "Manual long-term memory storage failed for history {}: {}",
+                history_uid,
+                exc,
+            )
+            return "error"
+
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            latest_pending = state.get("pending_turns", [])
+            if not isinstance(latest_pending, list):
+                latest_pending = []
+            state["pending_turns"] = latest_pending[len(summary_turns) :]
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
-                    "Long-term memory was saved but its history checkpoint failed for {}",
+                    "Manual long-term memory was saved but its checkpoint failed for {}",
                     history_uid,
                 )
-                return False
+                return "error"
 
-            logger.info(
-                "Long-term memory processed {} turns and saved {} entries",
-                self.summary_interval,
-                len(new_memories),
-            )
-            return True
+        logger.info(
+            "Long-term memory summary processed {} pending turns",
+            len(summary_turns),
+        )
+        return "success"
 
 
 long_term_memory_manager = LongTermMemoryManager()

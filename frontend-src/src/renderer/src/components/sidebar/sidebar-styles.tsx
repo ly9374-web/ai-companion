@@ -237,40 +237,6 @@ export const sidebarStyles = {
     },
   },
 
-  cameraPanel: {
-    container: {
-      width: '97%',
-      overflow: 'hidden',
-      px: 4,
-      minH: '240px',
-    },
-    header: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      mb: 4,
-    },
-    title: commonStyles.title,
-    videoContainer: {
-      ...commonStyles.panel,
-      width: '100%',
-      height: '240px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      overflow: 'hidden',
-      transition: 'all 0.2s',
-    },
-    video: {
-      width: '100%',
-      height: '100%',
-      objectFit: 'cover' as const,
-      transform: 'scaleX(-1)',
-      borderRadius: '8px',
-      display: 'block',
-    } as const,
-  },
-
   screenPanel: {
     container: {
       width: '97%',

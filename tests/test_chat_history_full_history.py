@@ -52,17 +52,17 @@ class FullHistoryDirectoryTests(unittest.TestCase):
         self.assertEqual(get_history("algernon", "legacy-history")[0]["content"], "hello")
 
     def test_new_history_and_messages_are_stored_in_full_history(self):
-        history_uid = create_new_history("mili")
-        store_message("mili", history_uid, "human", "hello")
+        history_uid = create_new_history("cuige")
+        store_message("cuige", history_uid, "human", "hello")
 
         expected_path = (
             Path("chat_history")
-            / "mili"
+            / "cuige"
             / "full_history"
             / f"{history_uid}.json"
         )
         self.assertTrue(expected_path.exists())
-        self.assertEqual(get_history("mili", history_uid)[0]["content"], "hello")
+        self.assertEqual(get_history("cuige", history_uid)[0]["content"], "hello")
 
 
 if __name__ == "__main__":

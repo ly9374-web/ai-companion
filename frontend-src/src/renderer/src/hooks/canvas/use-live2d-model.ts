@@ -10,6 +10,10 @@ import { updateModelConfig } from '../../../WebSDK/src/lappdefine';
 import { LAppDelegate } from '../../../WebSDK/src/lappdelegate';
 import { initializeLive2D } from '@cubismsdksamples/main';
 import { useMode } from '@/context/mode-context';
+import {
+  getSavedLive2DLayout,
+  saveLive2DLayout,
+} from '@/utils/live2d-layout-storage';
 
 interface UseLive2DModelProps {
   modelInfo: ModelInfo | undefined;
@@ -190,10 +194,15 @@ export const useLive2DModel = ({
         + Number(modelInfo?.initialXshift ?? 0) * dprX;
       const shiftedCenterY = canvas.height / 2
         + Number(modelInfo?.initialYshift ?? 0) * dprY;
-      const initialPosition = {
-        x: view._deviceToScreen.transformX(shiftedCenterX),
-        y: view._deviceToScreen.transformY(shiftedCenterY),
-      };
+      const savedLayout = getSavedLive2DLayout(modelInfo?.url);
+      const hasSavedPosition = Number.isFinite(savedLayout?.x)
+        && Number.isFinite(savedLayout?.y);
+      const initialPosition = hasSavedPosition
+        ? { x: Number(savedLayout?.x), y: Number(savedLayout?.y) }
+        : {
+          x: view._deviceToScreen.transformX(shiftedCenterX),
+          y: view._deviceToScreen.transformY(shiftedCenterY),
+        };
 
       setModelPosition(initialPosition.x, initialPosition.y);
       modelStartPos.current = initialPosition;
@@ -238,6 +247,8 @@ export const useLive2DModel = ({
   }, [getCanvasScale]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (modelInfo?.pointerInteractive !== true) return;
+
     const adapter = (window as any).getLAppAdapter?.();
     if (!adapter || !canvasRef.current) return;
 
@@ -384,6 +395,7 @@ export const useLive2DModel = ({
           modelPositionRef.current = finalPos;
           modelStartPos.current = finalPos; // Update base position for next potential drag
           setPosition(finalPos);
+          saveLive2DLayout(modelInfo?.url, finalPos);
         }
       }
     } else if (isPotentialTapRef.current && adapter && model && view && canvasRef.current) {
@@ -418,6 +430,12 @@ export const useLive2DModel = ({
     // Reset potential tap flag regardless of outcome
     isPotentialTapRef.current = false;
   }, [isDragging, canvasRef, modelInfo]);
+
+  useEffect(() => {
+    if (modelInfo?.pointerInteractive === true) return;
+    isPotentialTapRef.current = false;
+    setIsDragging(false);
+  }, [modelInfo?.pointerInteractive]);
 
   const handleMouseLeave = useCallback(() => {
     if (isDragging) {

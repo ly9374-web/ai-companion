@@ -45,6 +45,7 @@ class BasicMemoryAgent(AgentInterface):
         system: str,
         live2d_model,
         summary_llm: Optional[StatelessLLMInterface] = None,
+        rolling_summary_llm: Optional[StatelessLLMInterface] = None,
         tts_preprocessor_config: TTSPreprocessorConfig = None,
         faster_first_response: bool = True,
         segment_method: str = "pysbd",
@@ -92,6 +93,7 @@ class BasicMemoryAgent(AgentInterface):
 
         self._set_llm(llm)
         self._summary_llm = summary_llm or llm
+        self._rolling_summary_llm = rolling_summary_llm or self._summary_llm
         self.set_system(system if system else self._system)
 
         if self._use_mcpp and not all(
@@ -383,6 +385,7 @@ class BasicMemoryAgent(AgentInterface):
         long_term_relationship_context = ""
         short_term_relationship_context = ""
         tts_preference_change_context = ""
+        rolling_summary_context = ""
         frontend_activity_context = ""
         if input_data.metadata:
             frontend_activity_context = input_data.metadata.get(
@@ -399,6 +402,9 @@ class BasicMemoryAgent(AgentInterface):
             )
             tts_preference_change_context = input_data.metadata.get(
                 "tts_preference_change_context", ""
+            )
+            rolling_summary_context = input_data.metadata.get(
+                "rolling_summary_context", ""
             )
 
         # RAG memory is request-scoped. Relationship snapshots retain their
@@ -420,6 +426,7 @@ class BasicMemoryAgent(AgentInterface):
             text_prompt=text_prompt,
             frontend_activity_context=frontend_activity_context,
             tts_preference_change_context=tts_preference_change_context,
+            rolling_summary_context=rolling_summary_context,
             long_term_memory_context=long_term_memory_context,
             long_term_relationship_context=long_term_relationship_context,
             short_term_relationship_context=short_term_relationship_context,
@@ -503,6 +510,32 @@ class BasicMemoryAgent(AgentInterface):
         raw_output = "".join(chunks).strip()
         logger.info(
             "Long-term memory raw model output:\n{}",
+            raw_output or "[empty output]",
+        )
+        return raw_output
+
+    async def summarize_rolling_context(
+        self,
+        turns: List[Dict[str, str]],
+    ) -> str:
+        """Summarize the portion of this chat outside the direct context window."""
+        system_prompt = prompt_builder.load_summary_prompt("rolling_context")
+        summary_input = prompt_builder.build_rolling_context_summary_input(turns)
+        messages = [{"role": "user", "content": summary_input}]
+
+        logger.info("Rolling context system prompt:\n{}", system_prompt)
+        logger.info("Rolling context user prompt:\n{}", summary_input)
+        chunks: List[str] = []
+        async for event in self._rolling_summary_llm.chat_completion(
+            messages, system_prompt
+        ):
+            if isinstance(event, str):
+                chunks.append(event)
+            elif isinstance(event, dict) and event.get("type") == "text_delta":
+                chunks.append(event.get("text", ""))
+        raw_output = "".join(chunks).strip()
+        logger.info(
+            "Rolling context raw model output:\n{}",
             raw_output or "[empty output]",
         )
         return raw_output

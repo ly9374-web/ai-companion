@@ -66,6 +66,15 @@ class AgentFactory:
                 system_prompt=system_prompt,
                 **summary_llm_config,
             )
+            rolling_summary_llm_config = dict(llm_config)
+            rolling_summary_llm_config["model"] = basic_memory_settings.get(
+                "rolling_summary_model", "deepseek-v4-pro"
+            )
+            rolling_summary_llm = StatelessLLMFactory.create_llm(
+                llm_provider=llm_provider,
+                system_prompt=system_prompt,
+                **rolling_summary_llm_config,
+            )
 
             tool_prompts = kwargs.get("system_config", {}).get("tool_prompts", {})
 
@@ -78,6 +87,7 @@ class AgentFactory:
             return BasicMemoryAgent(
                 llm=llm,
                 summary_llm=summary_llm,
+                rolling_summary_llm=rolling_summary_llm,
                 system=system_prompt,
                 live2d_model=live2d_model,
                 tts_preprocessor_config=tts_preprocessor_config,

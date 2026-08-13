@@ -23,11 +23,12 @@
       "ttsInstructionNone": "None (Default)",
       "generateAudio": "Generate Voice",
       "generateAudioHelp": "When disabled, text replies remain visible but speech synthesis is skipped.",
-      "useCameraBackground": "Use Camera Background",
       "showSubtitle": "Show Subtitle",
       "characterPreset": "Character Preset",
       "maxHistoryTurns": "Context History Turns",
-      "maxHistoryTurnsHelp": "Number of completed user-assistant turns included as context in each model request. The current message is added separately. Range: 1-100; default: 8."
+      "maxHistoryTurnsHelp": "Number of completed user-assistant turns included as context in each model request. The current message is added separately. Range: 1-100; default: 8.",
+      "debugMode": "Debug",
+      "debugModeHelp": "When enabled, chats are still saved, but rolling, long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be summarized later after debug mode is disabled."
     },
     "tts": {
       "backgroundImage": "Background Image",
@@ -79,13 +80,10 @@
   },
   "footer": {
     "typeYourMessage": "Type your message...",
-    "cameraControl": "Click to start camera",
-    "cameraStopping": "Click to stop camera",
     "screenControl": "Click to start screen capture",
     "screenStopping": "Click to stop screen capture"
   },
   "sidebar": {
-    "camera": "Camera",
     "screen": "Screen",
     "browser": "Browser",
     "live": "Live",
@@ -104,13 +102,16 @@
     "newConversation": "New Conversation Started",
     "newChatHistory": "New chat history created",
     "historyDeleteSuccess": "History deleted successfully",
-    "historyDeleteFail": "Failed to delete history"
+    "historyDeleteFail": "Failed to delete history",
+    "manualSummaryRunning": "Summarizing long-term memory and short-term relationship…",
+    "manualSummaryComplete": "Summary complete; the next automatic summary starts from zero",
+    "manualSummaryEmpty": "Nothing to summarize yet",
+    "manualSummaryPartialFailure": "Part of the summary failed; successful items were reset",
+    "manualSummaryFailed": "Summary failed. Please try again later",
+    "manualSummaryDisabled": "Memory summaries are disabled in debug mode",
+    "manualSummaryDuplicate": "A summary is already running; no duplicate is needed"
   },
   "error": {
-    "cameraApiNotSupported": "Camera API is not supported on this device",
-    "noCameraFound": "No camera found on this device",
-    "failedStartCamera": "Failed to start camera",
-    "failedStartBackgroundCamera": "Failed to start background camera",
     "failedStartScreenCapture": "Failed to start screen capture",
     "failedStartVAD": "Failed to start VAD",
     "llmCantHear": "The LLM can't hear you.",

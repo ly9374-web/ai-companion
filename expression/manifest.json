@@ -1,0 +1,24 @@
+{
+  "id": "static-expression",
+  "version": 2,
+  "enabled": true,
+  "frontend_entry": "frontend/index.js",
+  "default_emotion": "中性",
+  "transition": {
+    "enabled": true,
+    "duration_ms": 160,
+    "easing": "ease-out"
+  },
+  "emotions": {
+    "不满": "不满.png",
+    "生气": "生气.png",
+    "慌乱": "慌乱.png",
+    "脸红": "脸红.png",
+    "哭泣": "哭泣.png",
+    "惊讶": "惊讶.png",
+    "疑惑": "疑惑.png",
+    "兴奋": "兴奋.png",
+    "愉快": "愉快.png",
+    "中性": "中性.png"
+  }
+}

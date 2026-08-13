@@ -1,26 +1,28 @@
 /* eslint-disable */
 import { Tabs } from '@chakra-ui/react'
-import { FiCamera, FiMonitor, FiGlobe } from 'react-icons/fi'
+import { FiMonitor, FiGlobe } from 'react-icons/fi'
 import { useTranslation } from 'react-i18next'
 import { sidebarStyles } from './sidebar-styles'
-import CameraPanel from './camera-panel'
 import ScreenPanel from './screen-panel'
 import BrowserPanel from './browser-panel'
+import {
+  OptionalSidebarContent,
+  OptionalSidebarTrigger,
+  useOptionalFeatureAvailability,
+} from '@optional-feature'
 
 function BottomTab(): JSX.Element {
   const { t } = useTranslation();
+  const optionalFeatureAvailable = useOptionalFeatureAvailability();
   
   return (
     <Tabs.Root 
-      defaultValue="camera" 
+      defaultValue={optionalFeatureAvailable ? "optional-feature" : "screen"}
       variant="plain"
       {...sidebarStyles.bottomTab.container}
     >
       <Tabs.List {...sidebarStyles.bottomTab.list}>
-        <Tabs.Trigger value="camera" {...sidebarStyles.bottomTab.trigger}>
-          <FiCamera />
-          {t('sidebar.camera')}
-        </Tabs.Trigger>
+        {optionalFeatureAvailable && <OptionalSidebarTrigger />}
         <Tabs.Trigger value="screen" {...sidebarStyles.bottomTab.trigger}>
           <FiMonitor />
           {t('sidebar.screen')}
@@ -31,9 +33,7 @@ function BottomTab(): JSX.Element {
         </Tabs.Trigger>
       </Tabs.List>
 
-      <Tabs.Content value="camera">
-        <CameraPanel />
-      </Tabs.Content>
+      {optionalFeatureAvailable && <OptionalSidebarContent />}
       
       <Tabs.Content value="screen">
         <ScreenPanel />

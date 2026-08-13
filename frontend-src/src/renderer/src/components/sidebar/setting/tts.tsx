@@ -15,6 +15,7 @@ import {
 } from '@/constants/image-settings';
 import { InputField, SelectField } from './common';
 import { settingStyles } from './setting-styles';
+import { useOptionalBackgroundActive } from '@optional-feature';
 
 interface TTSProps {
   onSave?: (callback: () => void) => () => void;
@@ -34,6 +35,7 @@ interface SynthesisSettings {
 function TTS({ onSave, onCancel }: TTSProps): JSX.Element {
   const { t } = useTranslation();
   const bgUrlContext = useBgUrl();
+  const optionalBackgroundActive = useOptionalBackgroundActive();
   const {
     wsUrl,
     setWsUrl,
@@ -121,7 +123,7 @@ function TTS({ onSave, onCancel }: TTSProps): JSX.Element {
 
   return (
     <Stack {...settingStyles.common.container}>
-      {!bgUrlContext?.useCameraBackground && (
+      {!optionalBackgroundActive && (
         <>
           <SelectField
             label={t('settings.tts.backgroundImage')}

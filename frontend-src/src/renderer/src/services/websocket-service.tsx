@@ -7,7 +7,6 @@ import { HistoryInfo } from '@/context/websocket-context';
 import { ConfigFile } from '@/context/character-config-context';
 import { toaster } from '@/components/ui/toaster';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
-import { getStoredGenerateAudio } from '@/constants/generate-audio';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
 import { getStoredApiKeys } from '@/constants/api-keys';
@@ -82,7 +81,10 @@ export interface MessageEvent {
   voice?: string;
   language_hint?: string;
   instruction?: string;
+  emotion?: string;
   max_history_turns?: number;
+  long_term_memory?: string;
+  short_term_relationship?: string;
   browser_view?: {
     debuggerFullscreenUrl: string;
     debuggerUrl: string;
@@ -138,7 +140,11 @@ class WebSocketService {
     });
     this.sendMessage({
       type: 'set-generate-audio',
-      enabled: getStoredGenerateAudio(),
+      enabled: false,
+    });
+    this.sendMessage({
+      type: 'set-debug-mode',
+      enabled: false,
     });
     this.sendMessage({
       type: 'set-qwen-tts-options',

@@ -12,6 +12,7 @@ import { useAiState, AiStateEnum } from "@/context/ai-state-context";
 import { useLive2DExpression } from "@/hooks/canvas/use-live2d-expression";
 import { useForceIgnoreMouse } from "@/hooks/utils/use-force-ignore-mouse";
 import { useMode } from "@/context/mode-context";
+import { optionalExpressionFeature } from '@/services/optional-expression-feature';
 
 interface Live2DProps {
   showSidebar?: boolean;
@@ -44,6 +45,18 @@ export const Live2D = memo(
     useIpcHandlers();
     useInterrupt();
     useAudioTask();
+
+    useEffect(() => {
+      optionalExpressionFeature.configureInteraction({
+        modelUrl: modelInfo?.url || '',
+        pointerInteractive: modelInfo?.pointerInteractive === true,
+        scrollToResize: modelInfo?.scrollToResize === true,
+      });
+    }, [
+      modelInfo?.url,
+      modelInfo?.pointerInteractive,
+      modelInfo?.scrollToResize,
+    ]);
 
     // Reset expression to default when AI state becomes idle
     useEffect(() => {
@@ -103,7 +116,9 @@ export const Live2D = memo(
           pointerEvents: isPet && forceIgnoreMouse ? "none" : "auto",
           overflow: "hidden",
           position: "relative",
-          cursor: isDragging ? "grabbing" : "default",
+          cursor: isDragging
+            ? "grabbing"
+            : (modelInfo?.pointerInteractive ? "grab" : "default"),
         }}
         onPointerDown={handlePointerDown}
         onContextMenu={handleContextMenu}
@@ -117,7 +132,9 @@ export const Live2D = memo(
             height: "100%",
             pointerEvents: isPet && forceIgnoreMouse ? "none" : "auto",
             display: "block",
-            cursor: isDragging ? "grabbing" : "default",
+            cursor: isDragging
+              ? "grabbing"
+              : (modelInfo?.pointerInteractive ? "grab" : "default"),
           }}
         />
       </div>

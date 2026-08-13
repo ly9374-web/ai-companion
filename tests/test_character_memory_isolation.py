@@ -24,7 +24,7 @@ from open_llm_vtuber.short_term_relationship_manager import (
 
 
 ALGERNON = "algernon_default_001"
-MILI = "mili_preset_001"
+CUIGE = "cuige_preset_001"
 
 
 class CharacterHistoryPathTests(unittest.TestCase):
@@ -63,8 +63,8 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
             ALGERNON,
         )
         await manager.store_memories(
-            [LongTermMemory("M记忆", "Mili 的独立记忆。")],
-            MILI,
+            [LongTermMemory("崔格记忆", "崔格的独立记忆。")],
+            CUIGE,
         )
 
         self.assertEqual(
@@ -72,14 +72,14 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
             [LongTermMemory("A记忆", "Algernon 的独立记忆。")],
         )
         self.assertEqual(
-            await manager.read_memories(MILI),
-            [LongTermMemory("M记忆", "Mili 的独立记忆。")],
+            await manager.read_memories(CUIGE),
+            [LongTermMemory("崔格记忆", "崔格的独立记忆。")],
         )
         self.assertNotEqual(
             (self.history_root / ALGERNON / "long_term_memory.md").read_text(
                 encoding="utf-8"
             ),
-            (self.history_root / MILI / "long_term_memory.md").read_text(
+            (self.history_root / CUIGE / "long_term_memory.md").read_text(
                 encoding="utf-8"
             ),
         )
@@ -87,7 +87,7 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
     async def test_long_relationship_update_and_injection_are_role_scoped(self):
         for conf_uid, content in (
             (ALGERNON, "Algernon 的长期记忆"),
-            (MILI, "Mili 的长期记忆"),
+            (CUIGE, "崔格的长期记忆"),
         ):
             role_dir = self.history_root / conf_uid
             role_dir.mkdir(parents=True)
@@ -103,7 +103,7 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def summarize(memory_file, existing_relationship_file):
-            role = "Algernon" if "Algernon" in memory_file else "Mili"
+            role = "Algernon" if "Algernon" in memory_file else "崔格"
             return json.dumps(
                 {"long_term_relationship": f"用户与 {role} 的长期关系。"},
                 ensure_ascii=False,
@@ -117,20 +117,20 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
                 await manager.record_completed_turn(ALGERNON, "same_history", summarize)
             )
             self.assertTrue(
-                await manager.record_completed_turn(MILI, "same_history", summarize)
+                await manager.record_completed_turn(CUIGE, "same_history", summarize)
             )
             algernon_injection = await manager.consume_injection(
                 ALGERNON, "same_history"
             )
-            mili_injection = await manager.consume_injection(MILI, "same_history")
+            cuige_injection = await manager.consume_injection(CUIGE, "same_history")
 
         self.assertIn("Algernon", algernon_injection)
-        self.assertNotIn("Mili", algernon_injection)
-        self.assertIn("Mili", mili_injection)
-        self.assertNotIn("Algernon", mili_injection)
+        self.assertNotIn("崔格", algernon_injection)
+        self.assertIn("崔格", cuige_injection)
+        self.assertNotIn("Algernon", cuige_injection)
 
     async def test_short_relationship_inputs_and_outputs_are_role_scoped(self):
-        for conf_uid, role in ((ALGERNON, "Algernon"), (MILI, "Mili")):
+        for conf_uid, role in ((ALGERNON, "Algernon"), (CUIGE, "崔格")):
             role_dir = self.history_root / conf_uid
             role_dir.mkdir(parents=True)
             (role_dir / "long_term_relationship.md").write_text(
@@ -160,9 +160,9 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Algernon", short_relationship)
                 role = "Algernon"
             else:
-                self.assertIn("Mili", long_relationship)
-                self.assertIn("Mili", short_relationship)
-                role = "Mili"
+                self.assertIn("崔格", long_relationship)
+                self.assertIn("崔格", short_relationship)
+                role = "崔格"
             return json.dumps(
                 {"short_term_relationship": f"用户与 {role} 的新短期关系。"},
                 ensure_ascii=False,
@@ -179,18 +179,18 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(
                 await manager.record_completed_turn(
-                    MILI, "same_history", "M 用户", "M 回答", summarize
+                    CUIGE, "same_history", "崔格用户", "崔格回答", summarize
                 )
             )
             algernon_injection = await manager.consume_injection(
                 ALGERNON, "same_history"
             )
-            mili_injection = await manager.consume_injection(MILI, "same_history")
+            cuige_injection = await manager.consume_injection(CUIGE, "same_history")
 
         self.assertIn("Algernon", algernon_injection)
-        self.assertNotIn("Mili", algernon_injection)
-        self.assertIn("Mili", mili_injection)
-        self.assertNotIn("Algernon", mili_injection)
+        self.assertNotIn("崔格", algernon_injection)
+        self.assertIn("崔格", cuige_injection)
+        self.assertNotIn("Algernon", cuige_injection)
 
 
 if __name__ == "__main__":

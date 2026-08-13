@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { BgUrlContextState } from '@/context/bgurl-context';
 import { useSubtitle } from '@/context/subtitle-context';
-import { useCamera } from '@/context/camera-context';
 import { useSwitchCharacter } from '@/hooks/utils/use-switch-character';
 import { useConfig } from '@/context/character-config-context';
 import i18n from 'i18next';
@@ -27,7 +26,6 @@ interface GeneralSettings {
   ttsLanguageHint: string[]
   ttsInstructionPreset: string[]
   selectedCharacterPreset: string[]
-  useCameraBackground: boolean
   showSubtitle: boolean
   maxHistoryTurns: number;
 }
@@ -57,8 +55,6 @@ export const useGeneralSettings = ({
   onCancel,
 }: UseGeneralSettingsProps) => {
   const { showSubtitle, setShowSubtitle } = useSubtitle();
-  const { setUseCameraBackground } = bgUrlContext || {};
-  const { startBackgroundCamera, stopBackgroundCamera } = useCamera();
   const { configFiles, getFilenameByName } = useConfig();
   const { switchCharacter } = useSwitchCharacter();
 
@@ -74,7 +70,6 @@ export const useGeneralSettings = ({
     ttsLanguageHint: [getStoredTtsLanguageHint()],
     ttsInstructionPreset: [getStoredTtsInstructionPreset()],
     selectedCharacterPreset: getCurrentCharacterFilename(),
-    useCameraBackground: bgUrlContext?.useCameraBackground || false,
     showSubtitle,
     maxHistoryTurns: getStoredMaxHistoryTurns(),
   };
@@ -197,21 +192,12 @@ export const useGeneralSettings = ({
 
     // Restore all settings to original values
     setShowSubtitle(originalSettings.showSubtitle);
-    if (bgUrlContext) {
-      bgUrlContext.setUseCameraBackground(originalSettings.useCameraBackground);
-    }
 
     // Restore original character preset
     if (originalConfName) {
       setConfName(originalConfName);
     }
 
-    // Handle camera state
-    if (originalSettings.useCameraBackground) {
-      startBackgroundCamera();
-    } else {
-      stopBackgroundCamera();
-    }
   };
 
   const handleCharacterPresetChange = (value: string[]): void => {
@@ -230,32 +216,11 @@ export const useGeneralSettings = ({
     }
   };
 
-  const handleCameraToggle = async (checked: boolean) => {
-    if (!setUseCameraBackground) return;
-
-    if (checked) {
-      try {
-        await startBackgroundCamera();
-        handleSettingChange('useCameraBackground', true);
-        setUseCameraBackground(true);
-      } catch (error) {
-        console.error('Failed to start camera:', error);
-        handleSettingChange('useCameraBackground', false);
-        setUseCameraBackground(false);
-      }
-    } else {
-      stopBackgroundCamera();
-      handleSettingChange('useCameraBackground', false);
-      setUseCameraBackground(false);
-    }
-  };
-
   return {
     settings,
     handleSettingChange,
     handleSave,
     handleCancel,
-    handleCameraToggle,
     handleCharacterPresetChange,
     showSubtitle,
     setShowSubtitle,

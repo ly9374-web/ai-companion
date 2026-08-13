@@ -2,7 +2,6 @@
 /* eslint-disable object-shorthand */
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useCamera } from '@/context/camera-context';
 import { useScreenCaptureContext } from '@/context/screen-capture-context';
 import { toaster } from "@/components/ui/toaster";
 import {
@@ -20,14 +19,13 @@ declare class ImageCapture {
 }
 
 interface ImageData {
-  source: 'camera' | 'screen';
+  source: 'screen';
   data: string;
   mime_type: string;
 }
 
 export function useMediaCapture() {
   const { t } = useTranslation();
-  const { stream: cameraStream } = useCamera();
   const { stream: screenStream } = useScreenCaptureContext();
 
   const getCompressionQuality = useCallback(() => {
@@ -52,7 +50,7 @@ export function useMediaCapture() {
     return DEFAULT_IMAGE_MAX_WIDTH;
   }, []);
 
-  const captureFrame = useCallback(async (stream: MediaStream | null, source: 'camera' | 'screen') => {
+  const captureFrame = useCallback(async (stream: MediaStream | null, source: 'screen') => {
     if (!stream) {
       console.warn(`No ${source} stream available`);
       return null;
@@ -101,19 +99,7 @@ export function useMediaCapture() {
   const captureAllMedia = useCallback(async () => {
     const images: ImageData[] = [];
 
-    // Capture camera frame
-    if (cameraStream) {
-      const cameraFrame = await captureFrame(cameraStream, 'camera');
-      if (cameraFrame) {
-        images.push({
-          source: 'camera',
-          data: cameraFrame,
-          mime_type: 'image/jpeg',
-        });
-      }
-    }
-
-    // Capture screen frame
+    // Only an explicitly shared screen may be attached to an LLM request.
     if (screenStream) {
       const screenFrame = await captureFrame(screenStream, 'screen');
       if (screenFrame) {
@@ -128,7 +114,7 @@ export function useMediaCapture() {
     console.log("images: ", images);
 
     return images;
-  }, [cameraStream, screenStream, captureFrame]);
+  }, [screenStream, captureFrame]);
 
   return {
     captureAllMedia,

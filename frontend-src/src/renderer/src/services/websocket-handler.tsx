@@ -22,6 +22,9 @@ import { useBrowser } from '@/context/browser-context';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
+import { optionalFeature } from '@optional-feature';
+import { optionalExpressionFeature } from '@/services/optional-expression-feature';
+import { MANUAL_SUMMARY_TOAST_ID } from '@/constants/manual-summary';
 
 function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
@@ -69,6 +72,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         setAiState('thinking-speaking');
         audioTaskQueue.clearQueue();
         clearResponse();
+        optionalFeature.onConversationStart();
         break;
       case 'conversation-chain-end':
         audioTaskQueue.addTask(() => new Promise<void>((resolve) => {
@@ -82,6 +86,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             }
             return currentState;
           });
+          optionalFeature.onConversationEnd();
           resolve();
         }));
         break;
@@ -121,6 +126,11 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
       case 'full-text':
         if (message.text) {
           setSubtitleText(message.text);
+        }
+        break;
+      case 'expression-update':
+        if (message.emotion) {
+          void optionalExpressionFeature.setEmotion(message.emotion);
         }
         break;
       case 'config-files':
@@ -163,6 +173,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         break;
       case 'tts-voice-updated':
       case 'qwen-tts-options-updated':
+      case 'debug-mode-updated':
       case 'max-history-turns-updated':
       case 'rag-options-updated':
         break;
@@ -246,9 +257,57 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         });
         break;
       case 'api-key-required':
+        if (toaster.isVisible(MANUAL_SUMMARY_TOAST_ID)) {
+          toaster.update(MANUAL_SUMMARY_TOAST_ID, {
+            title: t('error.deepseekApiKeyRequired'),
+            type: 'error',
+            duration: 3000,
+          });
+          break;
+        }
         toaster.create({
           title: t('error.deepseekApiKeyRequired'),
           type: 'warning',
+          duration: 3000,
+        });
+        break;
+      case 'manual-summary-result': {
+        const results = [
+          message.long_term_memory,
+          message.short_term_relationship,
+        ];
+        const hasSuccess = results.includes('success');
+        const hasFailure = results.some((result) => (
+          result === 'error' || result === 'unsupported'
+        ));
+        const isDisabled = results.every((result) => result === 'disabled');
+
+        let title = t('notification.manualSummaryComplete');
+        let type: 'success' | 'error' | 'info' = 'success';
+        if (isDisabled) {
+          title = t('notification.manualSummaryDisabled');
+          type = 'info';
+        } else if (hasFailure) {
+          title = hasSuccess
+            ? t('notification.manualSummaryPartialFailure')
+            : t('notification.manualSummaryFailed');
+          type = 'error';
+        } else if (!hasSuccess) {
+          title = t('notification.manualSummaryEmpty');
+          type = 'info';
+        }
+
+        toaster.update(MANUAL_SUMMARY_TOAST_ID, {
+          title,
+          type,
+          duration: 3000,
+        });
+        break;
+      }
+      case 'manual-summary-duplicate':
+        toaster.update(MANUAL_SUMMARY_TOAST_ID, {
+          title: t('notification.manualSummaryDuplicate'),
+          type: 'info',
           duration: 3000,
         });
         break;

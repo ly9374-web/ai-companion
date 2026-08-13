@@ -21,11 +21,12 @@ from ..chat_history_manager import (
     get_history,
     get_metadata,
     store_message,
-    update_metadate,
+    update_metadata_state,
 )
 from ..long_term_memory_manager import long_term_memory_manager
 from ..long_term_relationship_manager import long_term_relationship_manager
 from ..short_term_relationship_manager import short_term_relationship_manager
+from ..rolling_summary_manager import rolling_summary_manager
 from ..service_context import ServiceContext
 
 # Import necessary types from agent outputs
@@ -111,20 +112,19 @@ def _save_context_injection_schedule(
     last_relationship_injection_turn: int | None = None,
 ) -> None:
     """Persist schedule fields without discarding another schedule field."""
-    metadata = get_metadata(conf_uid, history_uid)
-    existing_state = metadata.get(CONTEXT_INJECTION_SCHEDULE_METADATA_KEY, {})
-    state = existing_state.copy() if isinstance(existing_state, dict) else {}
+    updates: dict[str, int] = {}
     if completed_turns is not None:
-        state["completed_turns"] = completed_turns
+        updates["completed_turns"] = completed_turns
     if last_relationship_injection_turn is not None:
-        state["last_relationship_injection_turn"] = (
+        updates["last_relationship_injection_turn"] = (
             last_relationship_injection_turn
         )
 
-    if not update_metadate(
+    if not update_metadata_state(
         conf_uid,
         history_uid,
-        {CONTEXT_INJECTION_SCHEDULE_METADATA_KEY: state},
+        CONTEXT_INJECTION_SCHEDULE_METADATA_KEY,
+        updates,
     ):
         logger.error(
             "Failed to persist unified context injection schedule for history {}",
@@ -185,6 +185,9 @@ async def process_single_conversation(
         skip_history = metadata and metadata.get("skip_history", False)
         request_metadata = dict(metadata or {})
         browser_time = request_metadata.get("browser_time", "")
+        optional_feature_context = request_metadata.pop(
+            "optional_feature_context", ""
+        )
         is_first_turn = False
         completed_context_turns = 0
         last_relationship_injection_turn: int | None = None
@@ -229,6 +232,16 @@ async def process_single_conversation(
                 )
             )
 
+        if optional_feature_context:
+            request_metadata["frontend_activity_context"] = (
+                prompt_builder.join_prompt_sections(
+                    (
+                        request_metadata.get("frontend_activity_context", ""),
+                        optional_feature_context,
+                    )
+                )
+            )
+
         if not skip_history and (input_text.strip() or images):
             tts_preference_change_context = (
                 context.consume_tts_preference_change_prompt()
@@ -238,6 +251,16 @@ async def process_single_conversation(
                     tts_preference_change_context
                 )
         if context.history_uid and not skip_history:
+            rolling_summary = rolling_summary_manager.read_injection(
+                context.character_config.conf_uid,
+                context.history_uid,
+                completed_context_turns,
+                context.max_history_turns,
+            )
+            if rolling_summary:
+                request_metadata["rolling_summary_context"] = (
+                    prompt_builder.build_rolling_summary_injection(rolling_summary)
+                )
             long_term_memory_context = (
                 await long_term_memory_manager.retrieve_injection(
                     conf_uid=context.character_config.conf_uid,
@@ -390,58 +413,159 @@ async def process_single_conversation(
                 next_turn_number,
             )
 
-            summarize = getattr(
-                context.agent_engine, "summarize_long_term_memory", None
-            )
-            if summarize is None:
-                logger.error(
-                    "The active agent does not support long-term memory summaries"
+            if context.debug_mode:
+                logger.info(
+                    "Debug mode is enabled; skipping rolling context, long-term "
+                    "memory, short-term relationship, and long-term relationship summaries"
                 )
             else:
-                await long_term_memory_manager.record_completed_turn(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    user_content=input_text,
-                    assistant_content=full_response,
-                    summarize=summarize,
+                summary_conf_uid = context.character_config.conf_uid
+                summary_history_uid = context.history_uid
+                summarize_rolling = getattr(
+                    context.agent_engine, "summarize_rolling_context", None
                 )
+                if (
+                    summarize_rolling is not None
+                    and next_turn_number >= 10
+                    and next_turn_number % 5 == 0
+                ):
+                    rolling_turns, rolling_start, rolling_end = (
+                        rolling_summary_manager.select_turns(
+                            get_history(
+                                context.character_config.conf_uid,
+                                context.history_uid,
+                            ),
+                            context.max_history_turns,
+                        )
+                    )
+                    if rolling_turns:
+                        context.summary_coordinator.enqueue(
+                            "rolling",
+                            lambda conf_uid=summary_conf_uid,
+                            history_uid=summary_history_uid,
+                            turns=rolling_turns,
+                            start_turn=rolling_start,
+                            end_turn=rolling_end,
+                            generated_at_turn=next_turn_number,
+                            callback=summarize_rolling: (
+                                rolling_summary_manager.generate_and_store(
+                                    conf_uid=conf_uid,
+                                    history_uid=history_uid,
+                                    turns=turns,
+                                    start_turn=start_turn,
+                                    end_turn=end_turn,
+                                    generated_at_turn=generated_at_turn,
+                                    summarize=callback,
+                                )
+                            ),
+                        )
 
-            summarize_short_relationship = getattr(
-                context.agent_engine,
-                "summarize_short_term_relationship",
-                None,
-            )
-            if summarize_short_relationship is None:
-                logger.error(
-                    "The active agent does not support short-term relationship summaries"
+                summarize = getattr(
+                    context.agent_engine, "summarize_long_term_memory", None
                 )
-            else:
-                await short_term_relationship_manager.record_completed_turn(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    user_content=input_text,
-                    assistant_content=full_response,
-                    browser_time=browser_time,
-                    summarize=summarize_short_relationship,
-                )
+                if summarize is None:
+                    logger.error(
+                        "The active agent does not support long-term memory summaries"
+                    )
+                else:
+                    memory_will_summarize = await long_term_memory_manager.record_turn(
+                        summary_conf_uid,
+                        summary_history_uid,
+                        input_text,
+                        full_response,
+                    )
+                    if (
+                        memory_will_summarize
+                        and not context.summary_coordinator.has_prefix(
+                            ("long_term_memory",)
+                        )
+                    ):
+                        context.summary_coordinator.enqueue(
+                            "long_term_memory",
+                            lambda conf_uid=summary_conf_uid,
+                            history_uid=summary_history_uid,
+                            callback=summarize: (
+                                long_term_memory_manager.summarize_pending_turns(
+                                    conf_uid=conf_uid,
+                                    history_uid=history_uid,
+                                    summarize=callback,
+                                    require_full_batch=True,
+                                )
+                            ),
+                        )
 
-            summarize_relationship = getattr(
-                context.agent_engine,
-                "summarize_long_term_relationship",
-                None,
-            )
-            if summarize_relationship is None:
-                logger.error(
-                    "The active agent does not support long-term relationship summaries"
+                summarize_short_relationship = getattr(
+                    context.agent_engine,
+                    "summarize_short_term_relationship",
+                    None,
                 )
-            else:
-                await long_term_relationship_manager.record_completed_turn(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=context.history_uid,
-                    user_content=input_text,
-                    assistant_content=full_response,
-                    summarize=summarize_relationship,
+                if summarize_short_relationship is None:
+                    logger.error(
+                        "The active agent does not support short-term relationship summaries"
+                    )
+                else:
+                    short_will_summarize = await short_term_relationship_manager.record_turn(
+                        summary_conf_uid,
+                        summary_history_uid,
+                        input_text,
+                        full_response,
+                    )
+                    if (
+                        short_will_summarize
+                        and not context.summary_coordinator.has_prefix(
+                            ("short_term_relationship",)
+                        )
+                    ):
+                        context.summary_coordinator.enqueue(
+                            "short_term_relationship",
+                            lambda conf_uid=summary_conf_uid,
+                            history_uid=summary_history_uid,
+                            current_browser_time=browser_time,
+                            callback=summarize_short_relationship: (
+                                short_term_relationship_manager.summarize_pending_turns(
+                                    conf_uid=conf_uid,
+                                    history_uid=history_uid,
+                                    summarize=callback,
+                                    browser_time=current_browser_time,
+                                    require_full_batch=True,
+                                )
+                            ),
+                        )
+
+                summarize_relationship = getattr(
+                    context.agent_engine,
+                    "summarize_long_term_relationship",
+                    None,
                 )
+                if summarize_relationship is None:
+                    logger.error(
+                        "The active agent does not support long-term relationship summaries"
+                    )
+                else:
+                    relationship_will_summarize = await long_term_relationship_manager.record_turn(
+                        summary_conf_uid,
+                        summary_history_uid,
+                        input_text,
+                        full_response,
+                    )
+                    if (
+                        relationship_will_summarize
+                        and not context.summary_coordinator.has_prefix(
+                            ("long_term_relationship",)
+                        )
+                    ):
+                        context.summary_coordinator.enqueue(
+                            "long_term_relationship",
+                            lambda conf_uid=summary_conf_uid,
+                            history_uid=summary_history_uid,
+                            callback=summarize_relationship: (
+                                long_term_relationship_manager.summarize_pending_update(
+                                    conf_uid=conf_uid,
+                                    history_uid=history_uid,
+                                    summarize=callback,
+                                )
+                            ),
+                        )
 
         await finalize_conversation_turn(
             tts_manager=tts_manager,

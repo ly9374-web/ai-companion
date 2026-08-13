@@ -14,6 +14,7 @@ from ..asr.asr_interface import ASRInterface
 from ..live2d_model import Live2dModel
 from ..tts.tts_interface import TTSInterface
 from ..utils.stream_audio import prepare_audio_payload
+from ..optional_features import process_expression_output
 
 
 # Convert class methods to standalone functions
@@ -59,6 +60,21 @@ async def process_agent_output(
     full_response = ""
     try:
         if isinstance(output, SentenceOutput):
+            expression_result = process_expression_output(
+                output.display_text.text,
+                output.tts_text,
+            )
+            output.display_text.text = expression_result["display_text"]
+            output.tts_text = expression_result["tts_text"]
+            if expression_result["emotion"]:
+                await websocket_send(
+                    json.dumps(
+                        {
+                            "type": "expression-update",
+                            "emotion": expression_result["emotion"],
+                        }
+                    )
+                )
             full_response = await handle_sentence_output(
                 output,
                 live2d_model,

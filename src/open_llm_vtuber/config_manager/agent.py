@@ -18,6 +18,9 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
     long_term_summary_model: str = Field(
         "deepseek-v4-pro", alias="long_term_summary_model"
     )
+    rolling_summary_model: str = Field(
+        "deepseek-v4-pro", alias="rolling_summary_model"
+    )
 
     faster_first_response: Optional[bool] = Field(True, alias="faster_first_response")
     segment_method: Literal["regex", "pysbd"] = Field("pysbd", alias="segment_method")
@@ -38,6 +41,10 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
         "long_term_summary_model": Description(
             en="DeepSeek model used for long-term memory and relationship summaries",
             zh="用于长期记忆和长期关系总结的 DeepSeek 模型",
+        ),
+        "rolling_summary_model": Description(
+            en="DeepSeek model used for per-chat rolling summaries",
+            zh="用于单次聊天滚动总结的 DeepSeek 模型",
         ),
         "faster_first_response": Description(
             en="Whether to respond as soon as encountering a comma in the first sentence to reduce latency (default: True)",

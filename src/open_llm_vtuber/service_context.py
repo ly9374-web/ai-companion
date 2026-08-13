@@ -34,6 +34,7 @@ from .config_manager import (
     validate_config,
 )
 from .config_manager.tts import QWEN_TTS_LANGUAGE_LABELS, QWEN_TTS_VOICE_LABELS
+from .summary_coordinator import SummaryCoordinator
 
 
 class ServiceContext:
@@ -68,9 +69,12 @@ class ServiceContext:
         self.send_text: Callable = None
         self.client_uid: str = None
 
-        # Per-client preference. Keep voice generation enabled by default so
-        # existing clients retain the original conversation workflow.
-        self.generate_audio: bool = True
+        # Per-client preference. The frontend may restore an explicit saved
+        # choice, but new sessions do not generate speech by default.
+        self.generate_audio: bool = False
+        # Debug sessions keep ordinary chat history but never feed completed
+        # turns into persistent or rolling summarizers.
+        self.debug_mode: bool = False
         self.max_history_turns: int = 8
         self.rag_top_k: int = 5
         self.rag_threshold: float = 0.5
@@ -79,6 +83,7 @@ class ServiceContext:
         self._tts_preference_change_pending: bool = False
         self._deepseek_api_key: str | None = None
         self._qwen_api_key: str | None = None
+        self.summary_coordinator = SummaryCoordinator()
 
     @staticmethod
     def _redact_api_keys(data: Any) -> Any:
@@ -224,6 +229,7 @@ class ServiceContext:
     async def close(self):
         """Clean up resources, especially the MCPClient."""
         logger.info("Closing ServiceContext resources...")
+        await self.summary_coordinator.close()
         if self.mcp_client:
             logger.info(f"Closing MCPClient for context instance {id(self)}...")
             await self.mcp_client.aclose()
@@ -453,7 +459,7 @@ class ServiceContext:
         self._qwen_api_key = qwen_api_key
 
         if self.agent_engine is not None:
-            for attribute in ("_llm", "_summary_llm"):
+            for attribute in ("_llm", "_summary_llm", "_rolling_summary_llm"):
                 llm = getattr(self.agent_engine, attribute, None)
                 if llm is not None and hasattr(llm, "set_api_key"):
                     llm.set_api_key(deepseek_api_key)

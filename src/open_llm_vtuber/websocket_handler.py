@@ -19,6 +19,8 @@ from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_individual_interrupt,
 )
+from .long_term_memory_manager import long_term_memory_manager
+from .short_term_relationship_manager import short_term_relationship_manager
 
 
 class WSMessage(TypedDict, total=False):
@@ -45,6 +47,7 @@ class WSMessage(TypedDict, total=False):
     hybrid_weight: Optional[float]
     deepseek_api_key: Optional[str]
     qwen_api_key: Optional[str]
+    optional_contexts: Optional[dict]
 
 
 class WebSocketHandler:
@@ -78,9 +81,11 @@ class WebSocketHandler:
             "set-tts-voice": self._handle_set_tts_voice,
             "set-qwen-tts-options": self._handle_set_qwen_tts_options,
             "set-generate-audio": self._handle_set_generate_audio,
+            "set-debug-mode": self._handle_set_debug_mode,
             "set-max-history-turns": self._handle_set_max_history_turns,
             "set-rag-options": self._handle_set_rag_options,
             "set-api-keys": self._handle_set_api_keys,
+            "summarize-pending-memory": self._handle_manual_summary,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
             "heartbeat": self._handle_heartbeat,
@@ -228,7 +233,12 @@ class WebSocketHandler:
             logger.warning("Message received without type")
             return
 
-        if msg_type in {"text-input", "mic-audio-end", "ai-speak-signal"}:
+        if msg_type in {
+            "text-input",
+            "mic-audio-end",
+            "ai-speak-signal",
+            "summarize-pending-memory",
+        }:
             context = self.client_contexts.get(client_uid)
             if context is not None and not context.has_deepseek_api_key():
                 if msg_type == "mic-audio-end":
@@ -524,6 +534,134 @@ class WebSocketHandler:
         )
         await websocket.send_text(json.dumps({"type": "api-keys-updated"}))
 
+    async def _handle_manual_summary(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Summarize pending completed turns without changing injection timing."""
+        context = self.client_contexts[client_uid]
+        current_task = self.current_conversation_tasks.get(client_uid)
+        current_turn_pending = int(
+            current_task is not None
+            and not current_task.done()
+            and bool(context.history_uid)
+        )
+        natural_summary_pending = False
+        if context.history_uid:
+            conf_uid = context.character_config.conf_uid
+            memory_state = long_term_memory_manager._get_state(
+                conf_uid, context.history_uid
+            )
+            relationship_state = short_term_relationship_manager._get_state(
+                conf_uid, context.history_uid
+            )
+            memory_pending = memory_state.get("pending_turns", [])
+            relationship_pending = relationship_state.get("pending_turns", [])
+            memory_pending_count = (
+                len(memory_pending) if isinstance(memory_pending, list) else 0
+            )
+            relationship_pending_count = (
+                len(relationship_pending)
+                if isinstance(relationship_pending, list)
+                else 0
+            )
+            natural_summary_pending = (
+                context.summary_coordinator.has_prefix(
+                    ("long_term_memory", "short_term_relationship")
+                )
+                or memory_pending_count + current_turn_pending
+                >= long_term_memory_manager.summary_interval
+                or relationship_pending_count + current_turn_pending
+                >= short_term_relationship_manager.update_interval
+            )
+        if (
+            natural_summary_pending
+            or context.summary_coordinator.has_any({"manual"})
+        ):
+            await websocket.send_text(
+                json.dumps({"type": "manual-summary-duplicate"})
+            )
+            return
+        if context.debug_mode:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "manual-summary-result",
+                        "long_term_memory": "disabled",
+                        "short_term_relationship": "disabled",
+                    }
+                )
+            )
+            return
+
+        history_uid = context.history_uid
+        if not history_uid:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "manual-summary-result",
+                        "long_term_memory": "empty",
+                        "short_term_relationship": "empty",
+                    }
+                )
+            )
+            return
+
+        summarize_memory = getattr(
+            context.agent_engine, "summarize_long_term_memory", None
+        )
+        summarize_short_relationship = getattr(
+            context.agent_engine, "summarize_short_term_relationship", None
+        )
+        conf_uid = context.character_config.conf_uid
+        browser_time = data.get("browser_time", "")
+        if not isinstance(browser_time, str):
+            browser_time = ""
+
+        async def run_manual_summary() -> tuple[str, str]:
+            memory_result = (
+                await long_term_memory_manager.summarize_pending_turns(
+                    conf_uid=conf_uid,
+                    history_uid=history_uid,
+                    summarize=summarize_memory,
+                )
+                if summarize_memory is not None
+                else "unsupported"
+            )
+            relationship_result = (
+                await short_term_relationship_manager.summarize_pending_turns(
+                    conf_uid=conf_uid,
+                    history_uid=history_uid,
+                    summarize=summarize_short_relationship,
+                    browser_time=browser_time,
+                )
+                if summarize_short_relationship is not None
+                else "unsupported"
+            )
+            return memory_result, relationship_result
+
+        future = context.summary_coordinator.enqueue("manual", run_manual_summary)
+
+        async def send_result() -> None:
+            try:
+                result = await future
+            except asyncio.CancelledError:
+                return
+            if not isinstance(result, tuple) or len(result) != 2:
+                memory_result, relationship_result = "error", "error"
+            else:
+                memory_result, relationship_result = result
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "manual-summary-result",
+                        "long_term_memory": memory_result,
+                        "short_term_relationship": relationship_result,
+                    }
+                )
+            )
+
+        asyncio.create_task(send_result())
+
     async def _handle_set_generate_audio(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
@@ -533,6 +671,19 @@ class WebSocketHandler:
             raise ValueError("Invalid generate-audio setting")
 
         self.client_contexts[client_uid].generate_audio = enabled
+
+    async def _handle_set_debug_mode(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Skip persistent memory and relationship summaries for one session."""
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("Invalid debug-mode setting")
+
+        self.client_contexts[client_uid].debug_mode = enabled
+        await websocket.send_text(
+            json.dumps({"type": "debug-mode-updated", "enabled": enabled})
+        )
 
     async def _handle_set_max_history_turns(
         self, websocket: WebSocket, client_uid: str, data: WSMessage

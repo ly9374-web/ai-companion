@@ -145,7 +145,7 @@ class CharacterSystemPromptTests(unittest.TestCase):
     def setUp(self):
         self.config_data = read_yaml(str(PROJECT_ROOT / "conf.yaml"))
 
-    def test_algernon_and_mili_have_correct_complete_system_prompts(self):
+    def test_algernon_and_cuige_have_correct_complete_system_prompts(self):
         config = validate_config(copy.deepcopy(self.config_data))
         algernon_template = prompt_builder.resolve_persona_prompt(
             config.character_config.persona_prompt_file,
@@ -155,35 +155,35 @@ class CharacterSystemPromptTests(unittest.TestCase):
             algernon_template, "smile, curious"
         )
         self.assertTrue(algernon.startswith("你是一个友善害羞的人工智能 Algernon"))
-        self.assertNotIn("mili", algernon)
+        self.assertNotIn("崔格", algernon)
         self.assertIn("smile, curious", algernon)
         self.assertIn("为自己困在虚拟世界感到无聊", algernon)
         self.assertIn("# 对话规范", algernon)
 
-        alt = read_yaml(str(PROJECT_ROOT / "characters" / "mili.yaml"))[
+        alt = read_yaml(str(PROJECT_ROOT / "characters" / "cuige.yaml"))[
             "character_config"
         ]
         merged = config.character_config.model_dump()
         merged.update(alt)
-        mili_config = validate_config(
+        cuige_config = validate_config(
             {
                 "system_config": config.system_config.model_dump(),
                 "character_config": merged,
             }
         )
-        mili_template = prompt_builder.resolve_persona_prompt(
-            mili_config.character_config.persona_prompt_file,
-            mili_config.character_config.persona_prompt,
+        cuige_template = prompt_builder.resolve_persona_prompt(
+            cuige_config.character_config.persona_prompt_file,
+            cuige_config.character_config.persona_prompt,
         )
-        mili = prompt_builder.render_character_system_prompt(
-            mili_template, "smile, shy"
+        cuige = prompt_builder.render_character_system_prompt(
+            cuige_template, "smile, shy"
         )
-        self.assertEqual(mili_config.character_config.character_name, "Mili")
-        self.assertTrue(mili.startswith("你是 Mili，一个刚刚被创造出来的人工智能"))
-        self.assertNotIn("你是 Algernon", mili)
-        self.assertIn("smile, shy", mili)
-        self.assertIn("今天是你来到这个世界的第一天", mili)
-        self.assertIn("# 对话规范", mili)
+        self.assertEqual(cuige_config.character_config.character_name, "崔格")
+        self.assertTrue(cuige.startswith("你是崔格，一个刚刚被创造出来的人工智能"))
+        self.assertNotIn("你是 Algernon", cuige)
+        self.assertIn("smile, shy", cuige)
+        self.assertIn("今天是你来到这个世界的第一天", cuige)
+        self.assertIn("# 对话规范", cuige)
 
     def test_legacy_inline_persona_remains_supported(self):
         legacy = copy.deepcopy(self.config_data)

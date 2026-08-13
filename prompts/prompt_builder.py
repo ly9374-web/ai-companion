@@ -54,13 +54,14 @@ def join_prompt_lines(lines: Iterable[str]) -> str:
 def build_output_language_instruction(language_hint: str) -> str:
     """Map the frontend TTS language hint to the main LLM instruction."""
     output_language = "中文" if language_hint == "zh" else "english"
-    return f"输出语言为{output_language}"
+    return f"你应该和用户用{output_language}对话"
 
 
 def build_user_request(
     text_prompt: str,
     frontend_activity_context: str = "",
     tts_preference_change_context: str = "",
+    rolling_summary_context: str = "",
     long_term_memory_context: str = "",
     long_term_relationship_context: str = "",
     short_term_relationship_context: str = "",
@@ -90,7 +91,12 @@ def build_user_request(
     while "\n\n\n" in rendered:
         rendered = rendered.replace("\n\n\n", "\n\n")
     return join_prompt_sections(
-        (frontend_activity_context, tts_preference_change_context, rendered)
+        (
+            frontend_activity_context,
+            tts_preference_change_context,
+            rolling_summary_context,
+            rendered,
+        )
     )
 
 
@@ -122,12 +128,25 @@ def build_short_relationship_injection(relationship_file: str) -> str:
     ).strip()
 
 
+def build_rolling_summary_injection(summary: str) -> str:
+    return load_runtime_prompt("rolling_summary_context", summary=summary)
+
+
 def build_long_term_memory_summary_input(
     recent_turns: list[dict[str, str]],
 ) -> str:
     return prompt_loader.render_prompt(
         "summaries.long_term_memory.user_prompt",
         recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
+    ).strip()
+
+
+def build_rolling_context_summary_input(
+    turns: list[dict[str, str]],
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.rolling_context.user_prompt",
+        conversation_turns_json=json.dumps(turns, ensure_ascii=False),
     ).strip()
 
 

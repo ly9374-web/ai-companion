@@ -2,6 +2,8 @@ import os
 import re
 import json
 import uuid
+import tempfile
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Literal, List, TypedDict, Optional
@@ -9,6 +11,39 @@ from loguru import logger
 
 
 FULL_HISTORY_DIR_NAME = "full_history"
+_HISTORY_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+_HISTORY_LOCKS_GUARD = threading.Lock()
+
+
+def _get_history_lock(conf_uid: str, history_uid: str) -> threading.RLock:
+    key = (conf_uid, history_uid)
+    with _HISTORY_LOCKS_GUARD:
+        lock = _HISTORY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _HISTORY_LOCKS[key] = lock
+        return lock
+
+
+def _write_history_atomic(filepath: str, history_data: list[dict]) -> None:
+    """Replace one history JSON only after the complete new file is durable."""
+    directory = os.path.dirname(filepath)
+    temp_path: str | None = None
+    try:
+        descriptor, temp_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(filepath)}.",
+            suffix=".tmp",
+            dir=directory,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temp_file:
+            json.dump(history_data, temp_file, ensure_ascii=False, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, filepath)
+        temp_path = None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 class HistoryMessage(TypedDict):
@@ -144,8 +179,8 @@ def create_new_history(conf_uid: str) -> str:
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
             }
         ]
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(initial_data, f, ensure_ascii=False, indent=2)
+        with _get_history_lock(conf_uid, history_uid):
+            _write_history_atomic(filepath, initial_data)
     except Exception as e:
         logger.error(f"Failed to create new history file: {e}")
         return ""
@@ -184,38 +219,33 @@ def store_message(
     filepath = _get_safe_history_path(conf_uid, history_uid)
     logger.debug(f"Storing {role} message to {filepath}")
 
-    history_data = []
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                history_data = json.load(f)
-        except Exception:
-            logger.error(f"Failed to load history file: {filepath}")
-            pass
+    with _get_history_lock(conf_uid, history_uid):
+        history_data = []
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    history_data = json.load(f)
+            except Exception:
+                logger.error(f"Failed to load history file: {filepath}")
 
-    now_str = datetime.now().isoformat(timespec="seconds")
-    new_item = {
-        "role": role,
-        "timestamp": now_str,
-        "content": content,
-    }
-
-    # Add optional display information if provided
-    if name is not None:
-        new_item["name"] = name
-    if avatar is not None:
-        new_item["avatar"] = avatar
-    if context_injections:
-        new_item["context_injections"] = {
-            key: value
-            for key, value in context_injections.items()
-            if isinstance(value, str) and value.strip()
+        now_str = datetime.now().isoformat(timespec="seconds")
+        new_item = {
+            "role": role,
+            "timestamp": now_str,
+            "content": content,
         }
-
-    history_data.append(new_item)
-
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(history_data, f, ensure_ascii=False, indent=2)
+        if name is not None:
+            new_item["name"] = name
+        if avatar is not None:
+            new_item["avatar"] = avatar
+        if context_injections:
+            new_item["context_injections"] = {
+                key: value
+                for key, value in context_injections.items()
+                if isinstance(value, str) and value.strip()
+            }
+        history_data.append(new_item)
+        _write_history_atomic(filepath, history_data)
     logger.debug(f"Successfully stored {role} message")
 
 
@@ -229,8 +259,9 @@ def get_metadata(conf_uid: str, history_uid: str) -> dict:
         return {}
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
+        with _get_history_lock(conf_uid, history_uid):
+            with open(filepath, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
 
         if history_data and history_data[0]["role"] == "metadata":
             return history_data[0]
@@ -253,29 +284,66 @@ def update_metadate(conf_uid: str, history_uid: str, metadata: dict) -> bool:
         return False
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
+        with _get_history_lock(conf_uid, history_uid):
+            if not os.path.exists(filepath):
+                return False
+            with open(filepath, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
 
-        if history_data and history_data[0]["role"] == "metadata":
-            # Update existing metadata while preserving other fields
-            history_data[0].update(metadata)
-        else:
-            # Create new metadata with timestamp if none exists
-            new_metadata = {
-                "role": "metadata",
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            }
-            new_metadata.update(metadata)  # Add new fields
-            history_data.insert(0, new_metadata)
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
+            if history_data and history_data[0]["role"] == "metadata":
+                history_data[0].update(metadata)
+            else:
+                new_metadata = {
+                    "role": "metadata",
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+                new_metadata.update(metadata)
+                history_data.insert(0, new_metadata)
+            _write_history_atomic(filepath, history_data)
 
         logger.debug(f"Updated metadata for history {history_uid}")
         return True
     except Exception as e:
         logger.error(f"Failed to set metadata: {e}")
     return False
+
+
+def update_metadata_state(
+    conf_uid: str,
+    history_uid: str,
+    state_key: str,
+    updates: dict,
+) -> bool:
+    """Atomically merge fields into one nested metadata state object."""
+    if not conf_uid or not history_uid or not state_key:
+        return False
+
+    filepath = _get_safe_history_path(conf_uid, history_uid)
+    try:
+        with _get_history_lock(conf_uid, history_uid):
+            if not os.path.exists(filepath):
+                return False
+            with open(filepath, "r", encoding="utf-8") as history_file:
+                history_data = json.load(history_file)
+
+            if history_data and history_data[0].get("role") == "metadata":
+                metadata = history_data[0]
+            else:
+                metadata = {
+                    "role": "metadata",
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+                history_data.insert(0, metadata)
+
+            existing_state = metadata.get(state_key, {})
+            state = existing_state.copy() if isinstance(existing_state, dict) else {}
+            state.update(updates)
+            metadata[state_key] = state
+            _write_history_atomic(filepath, history_data)
+        return True
+    except Exception as exc:
+        logger.error("Failed to update metadata state {}: {}", state_key, exc)
+        return False
 
 
 def get_history(conf_uid: str, history_uid: str) -> List[HistoryMessage]:
@@ -294,8 +362,9 @@ def get_history(conf_uid: str, history_uid: str) -> List[HistoryMessage]:
         return []
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
+        with _get_history_lock(conf_uid, history_uid):
+            with open(filepath, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
             # Filter out metadata
             return [msg for msg in history_data if msg["role"] != "metadata"]
     except Exception:
@@ -310,10 +379,11 @@ def delete_history(conf_uid: str, history_uid: str) -> bool:
 
     filepath = _get_safe_history_path(conf_uid, history_uid)
     try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-            logger.debug(f"Successfully deleted history file: {filepath}")
-            return True
+        with _get_history_lock(conf_uid, history_uid):
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                logger.debug(f"Successfully deleted history file: {filepath}")
+                return True
     except Exception as e:
         logger.error(f"Failed to delete history file: {e}")
     return False
@@ -337,8 +407,9 @@ def get_history_list(conf_uid: str) -> List[dict]:
             filepath = os.path.join(history_dir, filename)
 
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    messages = json.load(f)
+                with _get_history_lock(conf_uid, history_uid):
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        messages = json.load(f)
 
                     # Filter out metadata for checking if history is empty
                     actual_messages = [
@@ -366,7 +437,10 @@ def get_history_list(conf_uid: str) -> List[dict]:
         if len(empty_history_uids) > 0 and len(os.listdir(history_dir)) > 1:
             for uid in empty_history_uids:
                 try:
-                    os.remove(os.path.join(history_dir, f"{uid}.json"))
+                    with _get_history_lock(conf_uid, uid):
+                        empty_path = os.path.join(history_dir, f"{uid}.json")
+                        if os.path.exists(empty_path):
+                            os.remove(empty_path)
                     logger.info(f"Removed empty history file: {uid}")
                 except Exception as e:
                     logger.error(f"Failed to remove empty history file {uid}: {e}")
@@ -398,23 +472,25 @@ def modify_latest_message(
         return False
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
+        with _get_history_lock(conf_uid, history_uid):
+            if not os.path.exists(filepath):
+                return False
+            with open(filepath, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
 
-        if not history_data:
-            logger.warning("History is empty")
-            return False
+            if not history_data:
+                logger.warning("History is empty")
+                return False
 
-        latest_message = history_data[-1]
-        if latest_message["role"] != role:
-            logger.warning(
-                f"Latest message role ({latest_message['role']}) doesn't match requested role ({role})"
-            )
-            return False
+            latest_message = history_data[-1]
+            if latest_message["role"] != role:
+                logger.warning(
+                    f"Latest message role ({latest_message['role']}) doesn't match requested role ({role})"
+                )
+                return False
 
-        latest_message["content"] = new_content
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
+            latest_message["content"] = new_content
+            _write_history_atomic(filepath, history_data)
 
         logger.debug(f"Successfully modified latest {role} message")
         return True
@@ -435,13 +511,18 @@ def rename_history_file(
     old_filepath = _get_safe_history_path(conf_uid, old_history_uid)
     new_filepath = _get_safe_history_path(conf_uid, new_history_uid)
 
+    old_lock = _get_history_lock(conf_uid, old_history_uid)
+    new_lock = _get_history_lock(conf_uid, new_history_uid)
+    first_lock, second_lock = sorted((old_lock, new_lock), key=id)
     try:
-        if os.path.exists(old_filepath):
-            os.rename(old_filepath, new_filepath)
-            logger.info(
-                f"Renamed history file from {old_history_uid} to {new_history_uid}"
-            )
-            return True
+        with first_lock:
+            with second_lock:
+                if os.path.exists(old_filepath):
+                    os.replace(old_filepath, new_filepath)
+                    logger.info(
+                        f"Renamed history file from {old_history_uid} to {new_history_uid}"
+                    )
+                    return True
     except Exception as e:
         logger.error(f"Failed to rename history file: {e}")
     return False

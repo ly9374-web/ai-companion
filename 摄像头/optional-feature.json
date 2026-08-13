@@ -1,0 +1,16 @@
+{
+  "id": "camera",
+  "version": 8,
+  "backend_entry": "backend_context.py",
+  "frontend_entry": "frontend/index.js",
+  "electron_mac_usage_descriptions": {
+    "NSCameraUsageDescription": "Application requests access to the device's camera."
+  },
+  "config": {
+    "server_url": "ws://127.0.0.1:8765/ws",
+    "fps": 25,
+    "jpeg_quality": 0.8,
+    "max_result_age_ms": 2500,
+    "max_buffered_bytes": 1048576
+  }
+}

@@ -23,11 +23,12 @@
       "ttsInstructionNone": "空（默认）",
       "generateAudio": "生成语音",
       "generateAudioHelp": "关闭后仍会显示文字回复，但不会调用语音合成。",
-      "useCameraBackground": "使用摄像头背景",
       "showSubtitle": "显示字幕",
       "characterPreset": "角色预设",
       "maxHistoryTurns": "上下文历史轮数",
-      "maxHistoryTurnsHelp": "每次请求模型时带入的已完成用户-AI对话轮数，当前消息会另外加入。范围为1-100，默认为8。"
+      "maxHistoryTurnsHelp": "每次请求模型时带入的已完成用户-AI对话轮数，当前消息会另外加入。范围为1-100，默认为8。",
+      "debugMode": "调试",
+      "debugModeHelp": "开启后，聊天仍会正常保存，但不会调用滚动摘要、长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这些总结。"
     },
     "tts": {
       "backgroundImage": "背景图片",
@@ -79,13 +80,10 @@
   },
   "footer": {
     "typeYourMessage": "输入您的消息...",
-    "cameraControl": "点击启动摄像头",
-    "cameraStopping": "点击停止摄像头",
     "screenControl": "点击开始屏幕共享",
     "screenStopping": "点击停止屏幕共享"
   },
   "sidebar": {
-    "camera": "摄像头",
     "screen": "屏幕",
     "browser": "浏览器",
     "live": "直播",
@@ -104,13 +102,16 @@
     "newConversation": "新对话已开始",
     "newChatHistory": "新聊天历史已创建",
     "historyDeleteSuccess": "历史记录删除成功",
-    "historyDeleteFail": "删除历史记录失败"
+    "historyDeleteFail": "删除历史记录失败",
+    "manualSummaryRunning": "正在总结长期记忆和短期关系…",
+    "manualSummaryComplete": "总结完成，下一次自然总结已重新计数",
+    "manualSummaryEmpty": "暂无可总结内容",
+    "manualSummaryPartialFailure": "部分总结失败，成功项已重新计数",
+    "manualSummaryFailed": "总结失败，请稍后重试",
+    "manualSummaryDisabled": "调试模式下不会进行记忆总结",
+    "manualSummaryDuplicate": "正在总结，无需重复总结"
   },
   "error": {
-    "cameraApiNotSupported": "此设备不支持摄像头API",
-    "noCameraFound": "未找到摄像头设备",
-    "failedStartCamera": "启动摄像头失败",
-    "failedStartBackgroundCamera": "启动背景摄像头失败",
     "failedStartScreenCapture": "启动屏幕捕获失败",
     "failedStartVAD": "启动语音活动检测失败",
     "llmCantHear": "AI无法听到您的声音",

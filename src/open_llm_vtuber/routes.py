@@ -1,15 +1,21 @@
 import os
 import json
+import re
 from uuid import uuid4
 import numpy as np
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, UploadFile, File, Response
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 from loguru import logger
 from .service_context import ServiceContext
 from .websocket_handler import WebSocketHandler
 from .proxy_handler import ProxyHandler
+from .optional_features import (
+    EXPRESSION_FEATURE_DIR,
+    get_optional_feature,
+    get_expression_manifest,
+)
 
 
 def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
@@ -82,6 +88,114 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
     """
 
     router = APIRouter()
+
+    @router.get("/optional-features/expression/manifest")
+    async def get_optional_expression_manifest():
+        manifest = get_expression_manifest()
+        if manifest is None:
+            return JSONResponse({"available": False})
+
+        version = manifest.get("version", 1)
+        if not isinstance(version, (str, int)):
+            version = 1
+        entry = manifest["frontend_entry"]
+        emotion_urls = {
+            emotion: f"/optional-features/expression/files/{filename}?v={version}"
+            for emotion, filename in manifest["emotions"].items()
+        }
+        return JSONResponse(
+            {
+                "available": True,
+                "frontend_entry": (
+                    f"/optional-features/expression/files/{entry}?v={version}"
+                ),
+                "config": {
+                    "default_emotion": manifest.get("default_emotion", "中性"),
+                    "transition": manifest.get("transition", {}),
+                    "emotions": emotion_urls,
+                },
+            }
+        )
+
+    @router.get("/optional-features/expression/files/{relative_path:path}")
+    async def get_optional_expression_file(relative_path: str):
+        manifest = get_expression_manifest()
+        if manifest is None:
+            return Response(status_code=404)
+
+        allowed_files = {manifest["frontend_entry"], *manifest["emotions"].values()}
+        if relative_path not in allowed_files:
+            return Response(status_code=404)
+        requested_path = (EXPRESSION_FEATURE_DIR / relative_path).resolve()
+        if (
+            EXPRESSION_FEATURE_DIR.resolve() not in requested_path.parents
+            or not requested_path.is_file()
+        ):
+            return Response(status_code=404)
+        media_type = (
+            "application/javascript"
+            if relative_path.endswith(".js")
+            else "image/png"
+        )
+        return FileResponse(
+            requested_path,
+            media_type=media_type,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
+    @router.get("/optional-feature/manifest")
+    async def get_optional_feature_manifest():
+        feature = get_optional_feature()
+        if feature is None:
+            return JSONResponse({"available": False})
+        _feature_dir, manifest = feature
+        entry = manifest.get("frontend_entry")
+        if not isinstance(entry, str) or not entry.endswith(".js"):
+            return JSONResponse({"available": False})
+        version = manifest.get("version", 1)
+        if not isinstance(version, (str, int)):
+            version = 1
+        return JSONResponse(
+            {
+                "available": True,
+                "frontend_entry": (
+                    f"/optional-feature/files/{entry}?v={version}"
+                ),
+                "config": manifest.get("config", {}),
+            }
+        )
+
+    @router.get("/optional-feature/files/{relative_path:path}")
+    async def get_optional_feature_file(relative_path: str):
+        feature = get_optional_feature()
+        if feature is None or not relative_path.endswith(".js"):
+            return Response(status_code=404)
+        feature_dir, _manifest = feature
+        frontend_root = (feature_dir / "frontend").resolve()
+        requested_path = (feature_dir / relative_path).resolve()
+        if frontend_root not in requested_path.parents or not requested_path.is_file():
+            return Response(status_code=404)
+        return FileResponse(
+            requested_path,
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
+    @router.post("/optional-feature/diagnostics")
+    async def post_optional_feature_diagnostic(payload: dict):
+        event = payload.get("event")
+        details = payload.get("details")
+        if not isinstance(event, str) or not re.fullmatch(r"[a-z_]{1,64}", event):
+            return Response(status_code=400)
+        if not isinstance(details, dict):
+            details = {}
+        safe_details = {
+            str(key)[:64]: value
+            for key, value in list(details.items())[:30]
+            if isinstance(value, (str, int, float, bool, list))
+        }
+        logger.info("Optional feature diagnostic: {} | {}", event, safe_details)
+        return JSONResponse({"ok": True})
 
     @router.get("/web-tool")
     async def web_tool_redirect():

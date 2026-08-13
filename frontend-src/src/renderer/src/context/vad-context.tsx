@@ -125,11 +125,11 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
 
   // Persistent state management
   const [micOn, setMicOn] = useState(false);
-  const autoStopMicRef = useRef(true);
   const [autoStopMic, setAutoStopMicState] = useLocalStorage(
     'autoStopMic',
     DEFAULT_VAD_STATE.autoStopMic,
   );
+  const autoStopMicRef = useRef(autoStopMic);
   const [settings, setSettings] = useLocalStorage<VADSettings>(
     'vadSettings',
     DEFAULT_VAD_SETTINGS,
@@ -181,10 +181,6 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setAiStateRef.current = setAiState;
   }, [setAiState]);
-
-  useEffect(() => {
-    autoStopMicRef.current = autoStopMic;
-  }, []);
 
   useEffect(() => {
     autoStartMicRef.current = autoStartMicOn;

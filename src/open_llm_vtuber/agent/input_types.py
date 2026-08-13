@@ -6,7 +6,6 @@ from typing import List, Optional, Dict, Any
 class ImageSource(Enum):
     """Enum for different image sources"""
 
-    CAMERA = "camera"
     SCREEN = "screen"
     CLIPBOARD = "clipboard"
     UPLOAD = "upload"
@@ -87,6 +86,7 @@ class BatchInput(BaseInput):
             - 'skip_memory': Boolean flag indicating if this input should be skipped in AI's internal memory
             - 'skip_history': Boolean flag indicating if this input should be skipped in local history storage
             - 'long_term_memory_context': Request-scoped RAG memory content
+            - 'rolling_summary_context': Request-scoped summary outside direct history
             - 'long_term_relationship_context': Hidden long relationship snapshot
             - 'short_term_relationship_context': Hidden short relationship snapshot
             - 'tts_preference_change_context': One-turn notice for user-initiated TTS changes
