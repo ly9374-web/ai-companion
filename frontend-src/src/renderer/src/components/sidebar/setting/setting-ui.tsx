@@ -14,13 +14,13 @@ import {
 import { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloseButton } from '@/components/ui/close-button';
+import { toaster } from '@/components/ui/toaster';
 
 import { settingStyles } from './setting-styles';
 import General from './general';
 import Live2D from './live2d';
 import ASR from './asr';
 import Key from './key';
-import Agent from './agent';
 import Rag from './rag';
 
 interface SettingUIProps {
@@ -51,8 +51,13 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
 
   const handleSave = useCallback((): void => {
     saveHandlers.forEach((handler) => handler());
+    toaster.create({
+      title: t('notification.settingsSaved'),
+      type: 'success',
+      duration: 2000,
+    });
     onClose();
-  }, [saveHandlers, onClose]);
+  }, [saveHandlers, onClose, t]);
 
   const handleCancel = useCallback((): void => {
     cancelHandlers.forEach((handler) => handler());
@@ -83,12 +88,6 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
             onCancel={handleCancelCallback}
           />
         </Tabs.Content>
-        <Tabs.Content value="agent" {...settingStyles.settingUI.tabs.content}>
-          <Agent
-            onSave={handleSaveCallback}
-            onCancel={handleCancelCallback}
-          />
-        </Tabs.Content>
         <Tabs.Content value="rag" {...settingStyles.settingUI.tabs.content}>
           <Rag onSave={handleSaveCallback} onCancel={handleCancelCallback} />
         </Tabs.Content>
@@ -100,7 +99,7 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
   return (
     <DrawerRoot
       open={open}
-      onOpenChange={(e) => (e.open ? null : onClose())}
+      onOpenChange={(e) => (e.open ? null : handleCancel())}
       placement="start"
     >
       <DrawerBackdrop />
@@ -110,7 +109,7 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
             {t('common.settings')}
           </DrawerTitle>
           <div {...settingStyles.settingUI.closeButton}>
-            <DrawerCloseTrigger asChild onClick={handleCancel}>
+            <DrawerCloseTrigger asChild>
               <CloseButton size="sm" color="white" />
             </DrawerCloseTrigger>
           </div>
@@ -147,12 +146,6 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
                 {...settingStyles.settingUI.tabs.trigger}
               >
                 {t('settings.tabs.key')}
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="agent"
-                {...settingStyles.settingUI.tabs.trigger}
-              >
-                {t('settings.tabs.agent')}
               </Tabs.Trigger>
               <Tabs.Trigger
                 value="rag"

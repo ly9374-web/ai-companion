@@ -8,7 +8,7 @@ import httpx
 from loguru import logger
 from pydantic import SecretStr
 
-from ..config_manager.tts import QWEN_TTS_LANGUAGE_HINTS, QWEN_TTS_VOICES
+from ..config_manager.tts import QWEN_TTS_VOICES
 from .tts_interface import TTSInterface
 
 
@@ -25,7 +25,6 @@ class TTSEngine(TTSInterface):
         api_key: SecretStr | str = "",
         model: str = "qwen-audio-3.0-tts-flash",
         voice: str = "qwen-audio-3.0-tts-flash-longyuyaoluan",
-        language_hint: str = "en",
         instruction: str = "",
         sample_rate: int = 24000,
         rate: float = 1.0,
@@ -35,8 +34,6 @@ class TTSEngine(TTSInterface):
             raise ValueError(f"Unsupported Qwen TTS model: {model}")
         if voice not in QWEN_TTS_VOICES:
             raise ValueError(f"Unsupported Qwen-Audio Flash voice: {voice}")
-        if language_hint not in QWEN_TTS_LANGUAGE_HINTS:
-            raise ValueError(f"Unsupported Qwen TTS language hint: {language_hint}")
         if len(instruction) > 2000:
             raise ValueError("Qwen TTS instruction must not exceed 2000 characters")
         if sample_rate != 24000:
@@ -50,7 +47,6 @@ class TTSEngine(TTSInterface):
         )
         self.model = model
         self.voice = voice
-        self.language_hint = language_hint
         self.instruction = instruction.strip()
         self.sample_rate = sample_rate
         self.rate = rate
@@ -63,7 +59,9 @@ class TTSEngine(TTSInterface):
         )
 
     def generate_audio(self, text: str, file_name_no_ext=None) -> str:
-        normalized_text = text.strip()
+        # Qwen TTS may pronounce an ASCII asterisk literally. Treat it as a
+        # quotation mark for speech synthesis while leaving displayed text intact.
+        normalized_text = text.strip().replace("*", '"')
         if not normalized_text:
             raise ValueError("Qwen TTS text must not be empty")
         if len(normalized_text) > self.MAX_TEXT_CHARACTERS:
@@ -117,7 +115,6 @@ class TTSEngine(TTSInterface):
             "format": "wav",
             "sample_rate": self.sample_rate,
             "rate": self.rate,
-            "language_hints": [self.language_hint],
         }
         if self.instruction:
             payload["instruction"] = self.instruction

@@ -14,7 +14,12 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles as StarletteStaticFiles
 
-from .routes import init_client_ws_route, init_webtool_routes, init_proxy_route
+from .routes import (
+    init_account_routes,
+    init_client_ws_route,
+    init_webtool_routes,
+    init_proxy_route,
+)
 from .service_context import ServiceContext
 from .config_manager.utils import Config
 
@@ -96,6 +101,9 @@ class WebSocketServer:
 
         # Include routes, passing the context instance
         # The context will be populated during the initialize step
+        self.app.include_router(
+            init_account_routes(),
+        )
         self.app.include_router(
             init_client_ws_route(default_context_cache=self.default_context_cache),
         )

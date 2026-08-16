@@ -17,31 +17,55 @@ import { useChatHistory } from '@/context/chat-history-context';
 import { toaster } from '@/components/ui/toaster';
 import { useVAD } from '@/context/vad-context';
 import { AiState, useAiState } from "@/context/ai-state-context";
-import { useLocalStorage } from '@/hooks/utils/use-local-storage';
 import { useBrowser } from '@/context/browser-context';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
 import { optionalFeature } from '@optional-feature';
 import { optionalExpressionFeature } from '@/services/optional-expression-feature';
-import { MANUAL_SUMMARY_TOAST_ID } from '@/constants/manual-summary';
+import {
+  MANUAL_SUMMARY_TOAST_ID,
+  ROLLING_SUMMARY_TOAST_ID,
+} from '@/constants/manual-summary';
+import {
+  getCurrentBaseUrl,
+  getCurrentWsUrl,
+  setCurrentBaseUrl,
+  setCurrentWsUrl,
+} from '@/constants/connection-settings';
+import { getStoredCharacterPreset } from '@/constants/character-settings';
 
 function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
   const [wsState, setWsState] = useState<string>('CLOSED');
-  const [wsUrl, setWsUrl] = useLocalStorage<string>('wsUrl', defaultWsUrl);
-  const [baseUrl, setBaseUrl] = useLocalStorage<string>('baseUrl', defaultBaseUrl);
+  const [wsUrl, setWsUrlState] = useState<string>(getCurrentWsUrl);
+  const [baseUrl, setBaseUrlState] = useState<string>(getCurrentBaseUrl);
   const { aiState, setAiState, backendSynthComplete, setBackendSynthComplete } = useAiState();
   const { setModelInfo } = useLive2DConfig();
   const { setSubtitleText } = useSubtitle();
   const { clearResponse, setForceNewMessage, appendHumanMessage, appendOrUpdateToolCallMessage } = useChatHistory();
   const { addAudioTask } = useAudioTask();
   const bgUrlContext = useBgUrl();
-  const { confUid, setConfName, setConfUid, setConfigFiles } = useConfig();
+  const {
+    confName,
+    confUid,
+    setConfName,
+    setConfUid,
+    setConfigFiles,
+  } = useConfig();
   const [pendingModelInfo, setPendingModelInfo] = useState<ModelInfo | undefined>(undefined);
   const { startMic, stopMic, autoStartMicOnConvEnd } = useVAD();
   const autoStartMicOnConvEndRef = useRef(autoStartMicOnConvEnd);
   const { setBrowserViewData } = useBrowser();
+
+  const setWsUrl = useCallback((url: string) => {
+    setCurrentWsUrl(url);
+    setWsUrlState(url);
+  }, []);
+  const setBaseUrl = useCallback((url: string) => {
+    setCurrentBaseUrl(url);
+    setBaseUrlState(url);
+  }, []);
 
   useEffect(() => {
     autoStartMicOnConvEndRef.current = autoStartMicOnConvEnd;
@@ -136,6 +160,16 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
       case 'config-files':
         if (message.configs) {
           setConfigFiles(message.configs);
+          const storedCharacter = getStoredCharacterPreset();
+          const storedConfig = message.configs.find(
+            (config) => config.filename === storedCharacter,
+          );
+          if (storedConfig && storedConfig.name !== confName) {
+            wsService.sendMessage({
+              type: 'switch-config',
+              file: storedCharacter,
+            });
+          }
         }
         break;
       case 'config-switched':
@@ -193,6 +227,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             sliceLength: message.slice_length || 0,
             displayText: message.display_text || null,
             expressions: message.actions?.expressions || null,
+            emotion: message.emotion || null,
           });
         }
         break;
@@ -256,21 +291,35 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           duration: 2000,
         });
         break;
-      case 'api-key-required':
+      case 'api-key-required': {
+        const apiKeyRequiredTitle = t(
+          message.provider === 'grok'
+            ? 'error.grokApiKeyRequired'
+            : 'error.deepseekApiKeyRequired',
+        );
+        if (toaster.isVisible(ROLLING_SUMMARY_TOAST_ID)) {
+          toaster.update(ROLLING_SUMMARY_TOAST_ID, {
+            title: apiKeyRequiredTitle,
+            type: 'error',
+            duration: 3000,
+          });
+          break;
+        }
         if (toaster.isVisible(MANUAL_SUMMARY_TOAST_ID)) {
           toaster.update(MANUAL_SUMMARY_TOAST_ID, {
-            title: t('error.deepseekApiKeyRequired'),
+            title: apiKeyRequiredTitle,
             type: 'error',
             duration: 3000,
           });
           break;
         }
         toaster.create({
-          title: t('error.deepseekApiKeyRequired'),
+          title: apiKeyRequiredTitle,
           type: 'warning',
           duration: 3000,
         });
         break;
+      }
       case 'manual-summary-result': {
         const results = [
           message.long_term_memory,
@@ -311,6 +360,30 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           duration: 3000,
         });
         break;
+      case 'debug-rolling-summary-result': {
+        const status = message.status;
+        let title = t('notification.rollingSummaryFailed');
+        let type: 'success' | 'error' | 'info' = 'error';
+        if (status === 'success') {
+          title = t('notification.rollingSummaryComplete');
+          type = 'success';
+        } else if (status === 'empty') {
+          title = t('notification.rollingSummaryEmpty');
+          type = 'info';
+        } else if (status === 'duplicate') {
+          title = t('notification.rollingSummaryDuplicate');
+          type = 'info';
+        } else if (status === 'disabled') {
+          title = t('notification.rollingSummaryDebugOnly');
+          type = 'info';
+        }
+        toaster.update(ROLLING_SUMMARY_TOAST_ID, {
+          title,
+          type,
+          duration: 3000,
+        });
+        break;
+      }
       case 'backend-synth-complete':
         setBackendSynthComplete(true);
         break;
@@ -353,7 +426,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
       default:
         console.warn('Unknown message type:', message.type);
     }
-  }, [aiState, addAudioTask, appendHumanMessage, baseUrl, bgUrlContext, setAiState, setConfName, setConfUid, setConfigFiles, setCurrentHistoryUid, setHistoryList, setMessages, setModelInfo, setSubtitleText, startMic, stopMic, backendSynthComplete, setBackendSynthComplete, clearResponse, handleControlMessage, appendOrUpdateToolCallMessage, setBrowserViewData, t]);
+  }, [aiState, addAudioTask, appendHumanMessage, baseUrl, bgUrlContext, confName, setAiState, setConfName, setConfUid, setConfigFiles, setCurrentHistoryUid, setHistoryList, setMessages, setModelInfo, setSubtitleText, startMic, stopMic, backendSynthComplete, setBackendSynthComplete, clearResponse, handleControlMessage, appendOrUpdateToolCallMessage, setBrowserViewData, t]);
 
   useEffect(() => {
     wsService.connect(wsUrl);

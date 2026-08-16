@@ -105,18 +105,16 @@ class ProxyHandler:
             f"Client {client_id} connected to proxy. Total clients: {len(self.clients)}"
         )
 
-        # Ensure server connection is established
-        if not self.connected:
-            await self.connect_to_server()
+        try:
+            # Each ProxyHandler is scoped to one account by the route. Ensure
+            # its matching authenticated backend connection is established.
+            if not self.connected:
+                await self.connect_to_server()
 
-        if self.connected:
-            try:
+            if self.connected:
                 init_request = {"type": "request-init-config", "client_id": client_id}
                 await self.forward_to_server(init_request, client_id)
-            except Exception as e:
-                logger.error(f"Failed to request initialization: {e}")
 
-        try:
             # Handle messages from this client
             while True:
                 message = await websocket.receive_json()
@@ -137,11 +135,11 @@ class ProxyHandler:
                 else:
                     # Forward other message types directly
                     await self.forward_to_server(message, client_id)
-
         except WebSocketDisconnect:
-            await self.handle_client_disconnect(client_id)
+            pass
         except Exception as e:
             logger.error(f"Error handling client connection: {e}")
+        finally:
             await self.handle_client_disconnect(client_id)
 
     async def handle_client_disconnect(self, client_id: str):

@@ -5,9 +5,12 @@ import { useWebSocket } from '@/context/websocket-context';
 import {
   DEEPSEEK_API_KEY_STORAGE_KEY,
   getStoredApiKeys,
+  GROK_API_KEY_STORAGE_KEY,
+  isGrokEnabledForPageSession,
   QWEN_API_KEY_STORAGE_KEY,
+  setGrokEnabledForPageSession,
 } from '@/constants/api-keys';
-import { InputField } from './common';
+import { InputField, SwitchField } from './common';
 import { settingStyles } from './setting-styles';
 
 interface KeyProps {
@@ -17,13 +20,18 @@ interface KeyProps {
 
 interface ApiKeySettings {
   deepseekApiKey: string;
+  grokApiKey: string;
+  grokEnabled: boolean;
   qwenApiKey: string;
 }
 
 function Key({ onSave, onCancel }: KeyProps): JSX.Element {
   const { t } = useTranslation();
   const { sendMessage } = useWebSocket();
-  const initialSettings = getStoredApiKeys();
+  const initialSettings = {
+    ...getStoredApiKeys(),
+    grokEnabled: isGrokEnabledForPageSession(),
+  };
   const [settings, setSettings] = useState<ApiKeySettings>(initialSettings);
   const [originalSettings, setOriginalSettings] = useState<ApiKeySettings>(
     initialSettings,
@@ -35,13 +43,20 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
       JSON.stringify(settings.deepseekApiKey.trim()),
     );
     localStorage.setItem(
+      GROK_API_KEY_STORAGE_KEY,
+      JSON.stringify(settings.grokApiKey.trim()),
+    );
+    localStorage.setItem(
       QWEN_API_KEY_STORAGE_KEY,
       JSON.stringify(settings.qwenApiKey.trim()),
     );
+    setGrokEnabledForPageSession(settings.grokEnabled);
     setOriginalSettings(settings);
     sendMessage({
       type: 'set-api-keys',
       deepseek_api_key: settings.deepseekApiKey.trim(),
+      grok_api_key: settings.grokApiKey.trim(),
+      grok_enabled: settings.grokEnabled,
       qwen_api_key: settings.qwenApiKey.trim(),
     });
   }, [sendMessage, settings]);
@@ -70,6 +85,24 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
           deepseekApiKey,
         }))}
         placeholder={t('settings.key.deepseekPlaceholder')}
+      />
+      <InputField
+        label={t('settings.key.grok')}
+        value={settings.grokApiKey}
+        onChange={(grokApiKey) => setSettings((current) => ({
+          ...current,
+          grokApiKey,
+        }))}
+        placeholder={t('settings.key.grokPlaceholder')}
+      />
+      <SwitchField
+        label={t('settings.key.grokEnabled')}
+        checked={settings.grokEnabled}
+        onChange={(grokEnabled) => setSettings((current) => ({
+          ...current,
+          grokEnabled,
+        }))}
+        help={t('settings.key.grokEnabledHelp')}
       />
       <InputField
         label={t('settings.key.qwen')}

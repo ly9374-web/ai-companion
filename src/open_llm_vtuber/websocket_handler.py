@@ -14,13 +14,11 @@ from .chat_history_manager import (
     get_history_list,
 )
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
-from .config_manager.tts import QWEN_TTS_LANGUAGE_HINTS, QWEN_TTS_VOICES
+from .config_manager.tts import QWEN_TTS_VOICES
 from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_individual_interrupt,
 )
-from .long_term_memory_manager import long_term_memory_manager
-from .short_term_relationship_manager import short_term_relationship_manager
 
 
 class WSMessage(TypedDict, total=False):
@@ -35,7 +33,6 @@ class WSMessage(TypedDict, total=False):
     file: Optional[str]
     display_text: Optional[dict]
     voice: Optional[str]
-    language_hint: Optional[str]
     instruction: Optional[str]
     notify_ai: Optional[bool]
     sync_ai_preferences: Optional[bool]
@@ -46,6 +43,8 @@ class WSMessage(TypedDict, total=False):
     threshold: Optional[float]
     hybrid_weight: Optional[float]
     deepseek_api_key: Optional[str]
+    grok_api_key: Optional[str]
+    grok_enabled: Optional[bool]
     qwen_api_key: Optional[str]
     optional_contexts: Optional[dict]
 
@@ -86,13 +85,14 @@ class WebSocketHandler:
             "set-rag-options": self._handle_set_rag_options,
             "set-api-keys": self._handle_set_api_keys,
             "summarize-pending-memory": self._handle_manual_summary,
+            "summarize-rolling-context": self._handle_debug_rolling_summary,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
             "heartbeat": self._handle_heartbeat,
         }
 
     async def handle_new_connection(
-        self, websocket: WebSocket, client_uid: str
+        self, websocket: WebSocket, client_uid: str, account_name: str
     ) -> None:
         """
         Handle new WebSocket connection setup
@@ -106,7 +106,7 @@ class WebSocketHandler:
         """
         try:
             session_service_context = await self._init_service_context(
-                websocket.send_text, client_uid
+                websocket.send_text, client_uid, account_name
             )
 
             await self._store_client_data(client_uid, session_service_context)
@@ -156,7 +156,10 @@ class WebSocketHandler:
         # await websocket.send_text(json.dumps({"type": "control", "text": "start-mic"}))
 
     async def _init_service_context(
-        self, send_text: Callable, client_uid: str
+        self,
+        send_text: Callable,
+        client_uid: str,
+        account_name: str | None = None,
     ) -> ServiceContext:
         """Initialize service context for a new session by cloning the default context"""
         session_service_context = ServiceContext()
@@ -180,6 +183,8 @@ class WebSocketHandler:
             send_text=send_text,
             client_uid=client_uid,
         )
+        if account_name:
+            session_service_context.configure_account(account_name)
         return session_service_context
 
     async def handle_websocket_communication(
@@ -238,6 +243,7 @@ class WebSocketHandler:
             "mic-audio-end",
             "ai-speak-signal",
             "summarize-pending-memory",
+            "summarize-rolling-context",
         }:
             context = self.client_contexts.get(client_uid)
             if context is not None and not context.has_deepseek_api_key():
@@ -248,6 +254,28 @@ class WebSocketHandler:
                         {
                             "type": "api-key-required",
                             "provider": "deepseek",
+                        }
+                    )
+                )
+                return
+
+            if (
+                msg_type in {
+                    "text-input",
+                    "mic-audio-end",
+                    "ai-speak-signal",
+                }
+                and context is not None
+                and context.grok_enabled
+                and not context.has_grok_api_key()
+            ):
+                if msg_type == "mic-audio-end":
+                    self.received_data_buffers[client_uid] = np.array([], dtype=np.float32)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "api-key-required",
+                            "provider": "grok",
                         }
                     )
                 )
@@ -308,7 +336,10 @@ class WebSocketHandler:
     ) -> None:
         """Handle request for chat history list"""
         context = self.client_contexts[client_uid]
-        histories = get_history_list(context.character_config.conf_uid)
+        histories = get_history_list(
+            context.character_config.conf_uid,
+            context.history_root,
+        )
         await websocket.send_text(
             json.dumps({"type": "history-list", "histories": histories})
         )
@@ -327,6 +358,7 @@ class WebSocketHandler:
         context.agent_engine.set_memory_from_history(
             conf_uid=context.character_config.conf_uid,
             history_uid=history_uid,
+            history_root=context.history_root,
         )
 
         messages = [
@@ -338,6 +370,7 @@ class WebSocketHandler:
             for msg in get_history(
                 context.character_config.conf_uid,
                 history_uid,
+                context.history_root,
             )
             if msg["role"] != "system"
         ]
@@ -350,12 +383,16 @@ class WebSocketHandler:
     ) -> None:
         """Handle creation of new chat history"""
         context = self.client_contexts[client_uid]
-        history_uid = create_new_history(context.character_config.conf_uid)
+        history_uid = create_new_history(
+            context.character_config.conf_uid,
+            context.history_root,
+        )
         if history_uid:
             context.history_uid = history_uid
             context.agent_engine.set_memory_from_history(
                 conf_uid=context.character_config.conf_uid,
                 history_uid=history_uid,
+                history_root=context.history_root,
             )
             await websocket.send_text(
                 json.dumps(
@@ -378,6 +415,7 @@ class WebSocketHandler:
         success = delete_history(
             context.character_config.conf_uid,
             history_uid,
+            context.history_root,
         )
         await websocket.send_text(
             json.dumps(
@@ -476,19 +514,13 @@ class WebSocketHandler:
     async def _handle_set_qwen_tts_options(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
-        """Update Qwen voice, language hint, and instruction for one session."""
+        """Update Qwen voice and instruction for one session."""
         voice = data.get("voice")
-        language_hint = data.get("language_hint")
         instruction = data.get("instruction")
         notify_ai = data.get("notify_ai", False)
         sync_ai_preferences = data.get("sync_ai_preferences", False)
         if not isinstance(voice, str) or voice not in QWEN_TTS_VOICES:
             raise ValueError("Unsupported Qwen-Audio Flash voice")
-        if (
-            not isinstance(language_hint, str)
-            or language_hint not in QWEN_TTS_LANGUAGE_HINTS
-        ):
-            raise ValueError("Unsupported Qwen TTS language hint")
         if not isinstance(instruction, str) or len(instruction) > 2000:
             raise ValueError("Invalid Qwen TTS instruction")
         if not isinstance(notify_ai, bool):
@@ -499,18 +531,15 @@ class WebSocketHandler:
         context = self.client_contexts[client_uid]
         context.set_qwen_tts_options(
             voice=voice,
-            language_hint=language_hint,
             instruction=instruction,
             notify_ai=notify_ai,
             sync_ai_preferences=sync_ai_preferences,
         )
-        await context.refresh_character_system_prompt()
         await websocket.send_text(
             json.dumps(
                 {
                     "type": "qwen-tts-options-updated",
                     "voice": voice,
-                    "language_hint": language_hint,
                     "instruction": instruction,
                 },
                 ensure_ascii=False,
@@ -522,14 +551,22 @@ class WebSocketHandler:
     ) -> None:
         """Apply browser-stored API keys to this client session only."""
         deepseek_api_key = data.get("deepseek_api_key")
+        grok_api_key = data.get("grok_api_key")
+        grok_enabled = data.get("grok_enabled")
         qwen_api_key = data.get("qwen_api_key")
         if not isinstance(deepseek_api_key, str) or len(deepseek_api_key) > 4096:
             raise ValueError("Invalid DeepSeek API key")
+        if not isinstance(grok_api_key, str) or len(grok_api_key) > 4096:
+            raise ValueError("Invalid Grok API key")
+        if not isinstance(grok_enabled, bool):
+            raise ValueError("Invalid Grok enabled state")
         if not isinstance(qwen_api_key, str) or len(qwen_api_key) > 4096:
             raise ValueError("Invalid Qwen API key")
 
         self.client_contexts[client_uid].set_runtime_api_keys(
             deepseek_api_key=deepseek_api_key.strip(),
+            grok_api_key=grok_api_key.strip(),
+            grok_enabled=grok_enabled,
             qwen_api_key=qwen_api_key.strip(),
         )
         await websocket.send_text(json.dumps({"type": "api-keys-updated"}))
@@ -548,10 +585,10 @@ class WebSocketHandler:
         natural_summary_pending = False
         if context.history_uid:
             conf_uid = context.character_config.conf_uid
-            memory_state = long_term_memory_manager._get_state(
+            memory_state = context.long_term_memory_manager._get_state(
                 conf_uid, context.history_uid
             )
-            relationship_state = short_term_relationship_manager._get_state(
+            relationship_state = context.short_term_relationship_manager._get_state(
                 conf_uid, context.history_uid
             )
             memory_pending = memory_state.get("pending_turns", [])
@@ -569,9 +606,9 @@ class WebSocketHandler:
                     ("long_term_memory", "short_term_relationship")
                 )
                 or memory_pending_count + current_turn_pending
-                >= long_term_memory_manager.summary_interval
+                >= context.long_term_memory_manager.summary_interval
                 or relationship_pending_count + current_turn_pending
-                >= short_term_relationship_manager.update_interval
+                >= context.short_term_relationship_manager.update_interval
             )
         if (
             natural_summary_pending
@@ -619,7 +656,7 @@ class WebSocketHandler:
 
         async def run_manual_summary() -> tuple[str, str]:
             memory_result = (
-                await long_term_memory_manager.summarize_pending_turns(
+                await context.long_term_memory_manager.summarize_pending_turns(
                     conf_uid=conf_uid,
                     history_uid=history_uid,
                     summarize=summarize_memory,
@@ -628,7 +665,7 @@ class WebSocketHandler:
                 else "unsupported"
             )
             relationship_result = (
-                await short_term_relationship_manager.summarize_pending_turns(
+                await context.short_term_relationship_manager.summarize_pending_turns(
                     conf_uid=conf_uid,
                     history_uid=history_uid,
                     summarize=summarize_short_relationship,
@@ -656,6 +693,107 @@ class WebSocketHandler:
                         "type": "manual-summary-result",
                         "long_term_memory": memory_result,
                         "short_term_relationship": relationship_result,
+                    }
+                )
+            )
+
+        asyncio.create_task(send_result())
+
+    async def _handle_debug_rolling_summary(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Run an on-demand rolling summary while debug mode is enabled."""
+        context = self.client_contexts[client_uid]
+        if not context.debug_mode:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "disabled",
+                    }
+                )
+            )
+            return
+        if context.summary_coordinator.has_prefix(("rolling",)):
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "duplicate",
+                    }
+                )
+            )
+            return
+
+        history_uid = context.history_uid
+        summarize = getattr(
+            context.agent_engine, "summarize_rolling_context", None
+        )
+        if not history_uid:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "empty",
+                    }
+                )
+            )
+            return
+        if summarize is None:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "error",
+                    }
+                )
+            )
+            return
+
+        conf_uid = context.character_config.conf_uid
+        messages = get_history(conf_uid, history_uid, context.history_root)
+        turns, start_turn, end_turn = context.rolling_summary_manager.select_turns(
+            messages,
+            context.max_history_turns,
+        )
+        if not turns:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "empty",
+                    }
+                )
+            )
+            return
+
+        completed_turns = sum(
+            1 for message in messages if message.get("role") == "ai"
+        )
+        future = context.summary_coordinator.enqueue(
+            "rolling_debug",
+            lambda: context.rolling_summary_manager.generate_and_store(
+                conf_uid=conf_uid,
+                history_uid=history_uid,
+                turns=turns,
+                start_turn=start_turn,
+                end_turn=end_turn,
+                generated_at_turn=completed_turns,
+                summarize=summarize,
+                force=True,
+            ),
+        )
+
+        async def send_result() -> None:
+            try:
+                saved = await future
+            except asyncio.CancelledError:
+                return
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "debug-rolling-summary-result",
+                        "status": "success" if saved else "error",
                     }
                 )
             )

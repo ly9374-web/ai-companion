@@ -1,19 +1,20 @@
-export const MAX_HISTORY_TURNS_STORAGE_KEY = 'maxHistoryTurns';
 export const DEFAULT_MAX_HISTORY_TURNS = 8;
 export const MIN_MAX_HISTORY_TURNS = 1;
 export const MAX_MAX_HISTORY_TURNS = 100;
+export const MAX_HISTORY_TURNS_STORAGE_KEY = 'maxHistoryTurns';
 
 export const getStoredMaxHistoryTurns = (): number => {
-  const storedValue = localStorage.getItem(MAX_HISTORY_TURNS_STORAGE_KEY);
-  const parsedValue = Number.parseInt(storedValue ?? '', 10);
+  const value = Number.parseInt(
+    localStorage.getItem(MAX_HISTORY_TURNS_STORAGE_KEY) ?? '',
+    10,
+  );
+  return Number.isNaN(value)
+    || value < MIN_MAX_HISTORY_TURNS
+    || value > MAX_MAX_HISTORY_TURNS
+    ? DEFAULT_MAX_HISTORY_TURNS
+    : value;
+};
 
-  if (
-    Number.isNaN(parsedValue)
-    || parsedValue < MIN_MAX_HISTORY_TURNS
-    || parsedValue > MAX_MAX_HISTORY_TURNS
-  ) {
-    return DEFAULT_MAX_HISTORY_TURNS;
-  }
-
-  return parsedValue;
+export const setCurrentMaxHistoryTurns = (value: number): void => {
+  localStorage.setItem(MAX_HISTORY_TURNS_STORAGE_KEY, value.toString());
 };

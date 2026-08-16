@@ -2,6 +2,7 @@ import os
 import json
 import re
 from uuid import uuid4
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import numpy as np
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, UploadFile, File, Response
@@ -16,6 +17,49 @@ from .optional_features import (
     get_optional_feature,
     get_expression_manifest,
 )
+from .account_manager import (
+    AccountAlreadyExists,
+    InvalidAccountName,
+    register_account,
+    resolve_account_name,
+)
+
+
+def init_account_routes() -> APIRouter:
+    """Create the local, passwordless account profile endpoints."""
+    router = APIRouter()
+
+    @router.post("/api/accounts/login")
+    async def login_account(payload: dict):
+        try:
+            account = resolve_account_name(payload.get("account"))
+        except Exception as exc:
+            logger.exception("Failed to read account profile: {}", exc)
+            return JSONResponse(
+                {"error": "账号数据读取失败"},
+                status_code=500,
+            )
+        if account is None:
+            return JSONResponse({"error": "账号错误"}, status_code=404)
+        return JSONResponse({"account": account})
+
+    @router.post("/api/accounts/register")
+    async def create_account(payload: dict):
+        try:
+            account = register_account(payload.get("account"))
+        except InvalidAccountName as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except AccountAlreadyExists as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except Exception as exc:
+            logger.exception("Failed to create account profile: {}", exc)
+            return JSONResponse(
+                {"error": "账号数据创建失败"},
+                status_code=500,
+            )
+        return JSONResponse({"account": account}, status_code=201)
+
+    return router
 
 
 def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
@@ -35,11 +79,20 @@ def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
     @router.websocket("/client-ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for client connections"""
+        try:
+            account = resolve_account_name(websocket.query_params.get("account"))
+        except Exception as exc:
+            logger.exception("Failed to authenticate WebSocket account: {}", exc)
+            await websocket.close(code=1011, reason="Account storage unavailable")
+            return
+        if account is None:
+            await websocket.close(code=4401, reason="Account login required")
+            return
         await websocket.accept()
         client_uid = str(uuid4())
 
         try:
-            await ws_handler.handle_new_connection(websocket, client_uid)
+            await ws_handler.handle_new_connection(websocket, client_uid, account)
             await ws_handler.handle_websocket_communication(websocket, client_uid)
         except WebSocketDisconnect:
             await ws_handler.handle_disconnect(client_uid)
@@ -62,16 +115,44 @@ def init_proxy_route(server_url: str) -> APIRouter:
         APIRouter: Configured router with proxy WebSocket endpoint
     """
     router = APIRouter()
-    proxy_handler = ProxyHandler(server_url)
+    proxy_handlers: dict[str, ProxyHandler] = {}
+
+    def account_server_url(account: str) -> str:
+        parsed = urlsplit(server_url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["account"] = account
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+        )
 
     @router.websocket("/proxy-ws")
     async def proxy_endpoint(websocket: WebSocket):
         """WebSocket endpoint for proxy connections"""
         try:
+            account = resolve_account_name(websocket.query_params.get("account"))
+        except Exception as exc:
+            logger.exception("Failed to authenticate proxy account: {}", exc)
+            await websocket.close(code=1011, reason="Account storage unavailable")
+            return
+        if account is None:
+            await websocket.close(code=4401, reason="Account login required")
+            return
+
+        proxy_handler = proxy_handlers.get(account)
+        if proxy_handler is None:
+            proxy_handler = ProxyHandler(account_server_url(account))
+            proxy_handlers[account] = proxy_handler
+        try:
             await proxy_handler.handle_client_connection(websocket)
         except Exception as e:
             logger.error(f"Error in proxy connection: {e}")
             raise
+        finally:
+            if (
+                not proxy_handler.clients
+                and proxy_handlers.get(account) is proxy_handler
+            ):
+                proxy_handlers.pop(account, None)
 
     return router
 

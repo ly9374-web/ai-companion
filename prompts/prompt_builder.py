@@ -51,12 +51,6 @@ def join_prompt_lines(lines: Iterable[str]) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-def build_output_language_instruction(language_hint: str) -> str:
-    """Map the frontend TTS language hint to the main LLM instruction."""
-    output_language = "中文" if language_hint == "zh" else "english"
-    return f"你应该和用户用{output_language}对话"
-
-
 def build_user_request(
     text_prompt: str,
     frontend_activity_context: str = "",

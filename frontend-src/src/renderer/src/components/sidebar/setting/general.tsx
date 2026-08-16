@@ -1,22 +1,25 @@
 /* eslint-disable import/no-extraneous-dependencies */
 import { useTranslation } from "react-i18next";
-import { useCallback, useState } from "react";
-import { Stack, createListCollection } from "@chakra-ui/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Stack, createListCollection } from "@chakra-ui/react";
 import { useBgUrl } from "@/context/bgurl-context";
 import { settingStyles } from "./setting-styles";
 import { useConfig } from "@/context/character-config-context";
 import { useGeneralSettings } from "@/hooks/sidebar/setting/use-general-settings";
 import { useWebSocket } from "@/context/websocket-context";
 import { NumberField, SelectField, SwitchField } from "./common";
-import {
-  QWEN_TTS_LANGUAGE_HINTS,
-  QWEN_TTS_VOICES,
-} from "@/constants/qwen-tts-voices";
+import { QWEN_TTS_VOICES } from "@/constants/qwen-tts-voices";
 import {
   MAX_MAX_HISTORY_TURNS,
   MIN_MAX_HISTORY_TURNS,
 } from "@/constants/max-history-turns";
-import { OptionalGeneralSettings } from "@optional-feature";
+import { toaster } from "@/components/ui/toaster";
+import { ROLLING_SUMMARY_TOAST_ID } from "@/constants/manual-summary";
+import {
+  getGeneralRuntimeSettings,
+  setGeneralRuntimeSettings,
+} from "@/constants/general-runtime-settings";
+import { useAccount } from "@/context/account-context";
 
 interface GeneralProps {
   onSave?: (callback: () => void) => () => void;
@@ -39,10 +42,6 @@ const useCollections = () => {
     items: [...QWEN_TTS_VOICES],
   });
 
-  const ttsLanguageHints = createListCollection({
-    items: [...QWEN_TTS_LANGUAGE_HINTS],
-  });
-
   const ttsInstructionPresets = createListCollection({
     items: [
       { label: t("settings.general.ttsInstructionNone"), value: "none" },
@@ -60,7 +59,6 @@ const useCollections = () => {
   return {
     languages,
     ttsVoices,
-    ttsLanguageHints,
     ttsInstructionPresets,
     characterPresets,
   };
@@ -68,6 +66,7 @@ const useCollections = () => {
 
 function General({ onSave, onCancel }: GeneralProps): JSX.Element {
   const { t, i18n } = useTranslation();
+  const { logout } = useAccount();
   const bgUrlContext = useBgUrl();
   const { confName, setConfName } = useConfig();
   const {
@@ -75,8 +74,14 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     wsState,
   } = useWebSocket();
   const collections = useCollections();
-  const [generateAudio, setGenerateAudio] = useState(false);
-  const [debugMode, setDebugMode] = useState(false);
+  const initialRuntimeSettings = getGeneralRuntimeSettings();
+  const [generateAudio, setGenerateAudio] = useState(
+    initialRuntimeSettings.generateAudio,
+  );
+  const [debugMode, setDebugMode] = useState(initialRuntimeSettings.debugMode);
+  const runtimeSettingsRef = useRef({ generateAudio, debugMode });
+  const savedRuntimeSettingsRef = useRef(initialRuntimeSettings);
+  runtimeSettingsRef.current = { generateAudio, debugMode };
 
   const handleGenerateAudioChange = (enabled: boolean): void => {
     setGenerateAudio(enabled);
@@ -94,10 +99,57 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     }
   };
 
+  useEffect(() => {
+    if (!onSave || !onCancel) return undefined;
+
+    const removeSave = onSave(() => {
+      const nextSettings = runtimeSettingsRef.current;
+      savedRuntimeSettingsRef.current = nextSettings;
+      setGeneralRuntimeSettings(nextSettings);
+    });
+    const removeCancel = onCancel(() => {
+      const savedSettings = savedRuntimeSettingsRef.current;
+      setGenerateAudio(savedSettings.generateAudio);
+      setDebugMode(savedSettings.debugMode);
+      if (wsState === "OPEN") {
+        sendMessage({
+          type: "set-generate-audio",
+          enabled: savedSettings.generateAudio,
+        });
+        sendMessage({ type: "set-debug-mode", enabled: savedSettings.debugMode });
+      }
+    });
+
+    return () => {
+      removeSave?.();
+      removeCancel?.();
+    };
+  }, [onSave, onCancel, sendMessage, wsState]);
+
+  const handleRollingSummary = (): void => {
+    const loadingToast = {
+      title: t("notification.rollingSummaryRunning"),
+      type: "loading" as const,
+    };
+    if (toaster.isVisible(ROLLING_SUMMARY_TOAST_ID)) {
+      toaster.update(ROLLING_SUMMARY_TOAST_ID, loadingToast);
+    } else {
+      toaster.create({ id: ROLLING_SUMMARY_TOAST_ID, ...loadingToast });
+    }
+    if (wsState !== "OPEN") {
+      toaster.update(ROLLING_SUMMARY_TOAST_ID, {
+        title: t("error.websocketNotOpen"),
+        type: "error",
+        duration: 3000,
+      });
+      return;
+    }
+    sendMessage({ type: "summarize-rolling-context" });
+  };
+
   const handleQwenTtsOptionsChange = useCallback(
     (options: {
       voice: string;
-      language_hint: string;
       instruction: string;
       notify_ai: boolean;
     }) => {
@@ -157,14 +209,6 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
       />
 
       <SelectField
-        label={t("settings.general.ttsLanguageHint")}
-        value={settings.ttsLanguageHint}
-        onChange={(value) => handleSettingChange("ttsLanguageHint", value)}
-        collection={collections.ttsLanguageHints}
-        placeholder={t("settings.general.ttsLanguageHint")}
-      />
-
-      <SelectField
         label={t("settings.general.ttsInstruction")}
         value={settings.ttsInstructionPreset}
         onChange={(value) => handleSettingChange("ttsInstructionPreset", value)}
@@ -178,8 +222,6 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         onChange={handleGenerateAudioChange}
         help={t("settings.general.generateAudioHelp")}
       />
-
-      <OptionalGeneralSettings onSave={onSave} onCancel={onCancel} />
 
       <SelectField
         label={t("settings.general.characterPreset")}
@@ -215,6 +257,16 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         onChange={handleDebugModeChange}
         help={t("settings.general.debugModeHelp")}
       />
+
+      {debugMode && (
+        <Button colorPalette="blue" onClick={handleRollingSummary}>
+          {t("settings.general.rollingSummary")}
+        </Button>
+      )}
+
+      <Button colorPalette="red" variant="outline" onClick={logout}>
+        {t("account.logout")}
+      </Button>
     </Stack>
   );
 }

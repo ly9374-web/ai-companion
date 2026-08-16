@@ -35,7 +35,6 @@ i18n
     detection: {
       // Order and from where user language should be detected
       order: ["localStorage", "navigator"],
-      // Cache user language detection
       caches: ["localStorage"],
       // HTML attribute with which to set language
       htmlTag: document.documentElement,
@@ -50,7 +49,6 @@ i18n
     },
   });
 
-// Save language change to localStorage
 i18n.on("languageChanged", (lng) => {
   localStorage.setItem("i18nextLng", lng);
   // Update HTML document lang attribute

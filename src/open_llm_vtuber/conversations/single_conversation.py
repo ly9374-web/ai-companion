@@ -1,6 +1,7 @@
 from typing import Union, List, Dict, Any, Optional
 import asyncio
 import json
+from pathlib import Path
 from loguru import logger
 import numpy as np
 
@@ -23,10 +24,6 @@ from ..chat_history_manager import (
     store_message,
     update_metadata_state,
 )
-from ..long_term_memory_manager import long_term_memory_manager
-from ..long_term_relationship_manager import long_term_relationship_manager
-from ..short_term_relationship_manager import short_term_relationship_manager
-from ..rolling_summary_manager import rolling_summary_manager
 from ..service_context import ServiceContext
 
 # Import necessary types from agent outputs
@@ -64,17 +61,22 @@ def _is_time_request(input_text: str) -> bool:
     return normalized in TIME_REQUEST_COMMANDS
 
 
-def _is_first_turn(conf_uid: str, history_uid: str) -> bool:
-    messages = get_history(conf_uid, history_uid)
+def _is_first_turn(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> bool:
+    messages = get_history(conf_uid, history_uid, history_root)
     return not any(message.get("role") in {"human", "ai"} for message in messages)
 
 
 def _get_completed_context_turns(
     conf_uid: str,
     history_uid: str,
+    history_root: str | Path = "chat_history",
 ) -> tuple[int, int | None]:
     """Return completed turns and the last relationship snapshot turn."""
-    metadata = get_metadata(conf_uid, history_uid)
+    metadata = get_metadata(conf_uid, history_uid, history_root)
     state = metadata.get(CONTEXT_INJECTION_SCHEDULE_METADATA_KEY, {})
     if isinstance(state, dict):
         completed_turns = state.get("completed_turns")
@@ -92,13 +94,14 @@ def _get_completed_context_turns(
                 last_injection_turn = None
             return completed_turns, last_injection_turn
 
-    messages = get_history(conf_uid, history_uid)
+    messages = get_history(conf_uid, history_uid, history_root)
     user_turns = sum(message.get("role") == "human" for message in messages)
     assistant_turns = sum(message.get("role") == "ai" for message in messages)
     completed_turns = min(user_turns, assistant_turns)
     _save_context_injection_schedule(
         conf_uid,
         history_uid,
+        history_root=history_root,
         completed_turns=completed_turns,
     )
     return completed_turns, None
@@ -108,6 +111,7 @@ def _save_context_injection_schedule(
     conf_uid: str,
     history_uid: str,
     *,
+    history_root: str | Path = "chat_history",
     completed_turns: int | None = None,
     last_relationship_injection_turn: int | None = None,
 ) -> None:
@@ -125,6 +129,7 @@ def _save_context_injection_schedule(
         history_uid,
         CONTEXT_INJECTION_SCHEDULE_METADATA_KEY,
         updates,
+        history_root,
     ):
         logger.error(
             "Failed to persist unified context injection schedule for history {}",
@@ -136,11 +141,13 @@ def _save_completed_context_turns(
     conf_uid: str,
     history_uid: str,
     completed_turns: int,
+    history_root: str | Path = "chat_history",
 ) -> None:
     """Persist the unified count after one complete user-assistant turn."""
     _save_context_injection_schedule(
         conf_uid,
         history_uid,
+        history_root=history_root,
         completed_turns=completed_turns,
     )
 
@@ -195,6 +202,7 @@ async def process_single_conversation(
             is_first_turn = _is_first_turn(
                 context.character_config.conf_uid,
                 context.history_uid,
+                context.history_root,
             )
             (
                 completed_context_turns,
@@ -202,6 +210,7 @@ async def process_single_conversation(
             ) = _get_completed_context_turns(
                 context.character_config.conf_uid,
                 context.history_uid,
+                context.history_root,
             )
 
         next_turn_number = completed_context_turns + 1
@@ -251,7 +260,7 @@ async def process_single_conversation(
                     tts_preference_change_context
                 )
         if context.history_uid and not skip_history:
-            rolling_summary = rolling_summary_manager.read_injection(
+            rolling_summary = context.rolling_summary_manager.read_injection(
                 context.character_config.conf_uid,
                 context.history_uid,
                 completed_context_turns,
@@ -262,7 +271,7 @@ async def process_single_conversation(
                     prompt_builder.build_rolling_summary_injection(rolling_summary)
                 )
             long_term_memory_context = (
-                await long_term_memory_manager.retrieve_injection(
+                await context.long_term_memory_manager.retrieve_injection(
                     conf_uid=context.character_config.conf_uid,
                     query=input_text,
                     top_k=context.rag_top_k,
@@ -276,12 +285,12 @@ async def process_single_conversation(
                 )
             if should_inject_relationships:
                 request_metadata["long_term_relationship_context"] = (
-                    await long_term_relationship_manager.read_injection(
+                    await context.long_term_relationship_manager.read_injection(
                         context.character_config.conf_uid
                     )
                 )
                 request_metadata["short_term_relationship_context"] = (
-                    await short_term_relationship_manager.read_injection(
+                    await context.short_term_relationship_manager.read_injection(
                         context.character_config.conf_uid
                     )
                 )
@@ -311,11 +320,13 @@ async def process_single_conversation(
                 content=input_text,
                 name=context.character_config.human_name,
                 context_injections=context_injections,
+                history_root=context.history_root,
             )
             if should_inject_relationships:
                 _save_context_injection_schedule(
                     context.character_config.conf_uid,
                     context.history_uid,
+                    history_root=context.history_root,
                     last_relationship_injection_turn=next_turn_number,
                 )
 
@@ -404,13 +415,13 @@ async def process_single_conversation(
                 content=full_response,
                 name=context.character_config.character_name,
                 avatar=context.character_config.avatar,
+                history_root=context.history_root,
             )
-            logger.info(f"AI response: {full_response}")
-
             _save_completed_context_turns(
                 context.character_config.conf_uid,
                 context.history_uid,
                 next_turn_number,
+                context.history_root,
             )
 
             if context.debug_mode:
@@ -430,10 +441,11 @@ async def process_single_conversation(
                     and next_turn_number % 5 == 0
                 ):
                     rolling_turns, rolling_start, rolling_end = (
-                        rolling_summary_manager.select_turns(
+                        context.rolling_summary_manager.select_turns(
                             get_history(
                                 context.character_config.conf_uid,
                                 context.history_uid,
+                                context.history_root,
                             ),
                             context.max_history_turns,
                         )
@@ -448,7 +460,7 @@ async def process_single_conversation(
                             end_turn=rolling_end,
                             generated_at_turn=next_turn_number,
                             callback=summarize_rolling: (
-                                rolling_summary_manager.generate_and_store(
+                                context.rolling_summary_manager.generate_and_store(
                                     conf_uid=conf_uid,
                                     history_uid=history_uid,
                                     turns=turns,
@@ -468,7 +480,7 @@ async def process_single_conversation(
                         "The active agent does not support long-term memory summaries"
                     )
                 else:
-                    memory_will_summarize = await long_term_memory_manager.record_turn(
+                    memory_will_summarize = await context.long_term_memory_manager.record_turn(
                         summary_conf_uid,
                         summary_history_uid,
                         input_text,
@@ -485,7 +497,7 @@ async def process_single_conversation(
                             lambda conf_uid=summary_conf_uid,
                             history_uid=summary_history_uid,
                             callback=summarize: (
-                                long_term_memory_manager.summarize_pending_turns(
+                                context.long_term_memory_manager.summarize_pending_turns(
                                     conf_uid=conf_uid,
                                     history_uid=history_uid,
                                     summarize=callback,
@@ -504,7 +516,7 @@ async def process_single_conversation(
                         "The active agent does not support short-term relationship summaries"
                     )
                 else:
-                    short_will_summarize = await short_term_relationship_manager.record_turn(
+                    short_will_summarize = await context.short_term_relationship_manager.record_turn(
                         summary_conf_uid,
                         summary_history_uid,
                         input_text,
@@ -522,7 +534,7 @@ async def process_single_conversation(
                             history_uid=summary_history_uid,
                             current_browser_time=browser_time,
                             callback=summarize_short_relationship: (
-                                short_term_relationship_manager.summarize_pending_turns(
+                                context.short_term_relationship_manager.summarize_pending_turns(
                                     conf_uid=conf_uid,
                                     history_uid=history_uid,
                                     summarize=callback,
@@ -542,7 +554,7 @@ async def process_single_conversation(
                         "The active agent does not support long-term relationship summaries"
                     )
                 else:
-                    relationship_will_summarize = await long_term_relationship_manager.record_turn(
+                    relationship_will_summarize = await context.long_term_relationship_manager.record_turn(
                         summary_conf_uid,
                         summary_history_uid,
                         input_text,
@@ -559,7 +571,7 @@ async def process_single_conversation(
                             lambda conf_uid=summary_conf_uid,
                             history_uid=summary_history_uid,
                             callback=summarize_relationship: (
-                                long_term_relationship_manager.summarize_pending_update(
+                                context.long_term_relationship_manager.summarize_pending_update(
                                     conf_uid=conf_uid,
                                     history_uid=history_uid,
                                     summarize=callback,

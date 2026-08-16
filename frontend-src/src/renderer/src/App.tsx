@@ -29,6 +29,8 @@ import WebSocketStatus from "./components/canvas/ws-status";
 import { ModeProvider, useMode } from "./context/mode-context";
 import { useSpaceToTalk } from "./hooks/utils/use-space-to-talk";
 import { useManualSummary } from "./hooks/utils/use-manual-summary";
+import { AccountProvider, useAccount } from "./context/account-context";
+import LoginScreen from "./components/account/login-screen";
 
 function AppContent(): JSX.Element {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -150,18 +152,26 @@ function AppContent(): JSX.Element {
 function App(): JSX.Element {
   return (
     <ChakraProvider value={defaultSystem}>
-      {/* ModeProvider needs to wrap AppContent to provide mode to getGlobalStyles */}
-      <ModeProvider>
-        <AppWithGlobalStyles />
-      </ModeProvider>
+      <AccountProvider>
+        {/* ModeProvider needs to wrap AppContent to provide mode to getGlobalStyles */}
+        <ModeProvider>
+          <AppWithGlobalStyles />
+        </ModeProvider>
+      </AccountProvider>
     </ChakraProvider>
   );
 }
 
 // New component to access mode for global styles
 function AppWithGlobalStyles(): JSX.Element {
+  const { account } = useAccount();
+
+  if (!account) {
+    return <LoginScreen />;
+  }
+
   return (
-    <>
+    <Box key={account}>
       <OptionalFeatureProvider>
         <ScreenCaptureProvider>
           <CharacterConfigProvider>
@@ -188,7 +198,7 @@ function AppWithGlobalStyles(): JSX.Element {
           </CharacterConfigProvider>
         </ScreenCaptureProvider>
       </OptionalFeatureProvider>
-    </>
+    </Box>
   );
 }
 

@@ -11,6 +11,7 @@ import { audioManager } from '@/utils/audio-manager';
 import { toaster } from '@/components/ui/toaster';
 import { useWebSocket } from '@/context/websocket-context';
 import { DisplayText } from '@/services/websocket-service';
+import { optionalExpressionFeature } from '@/services/optional-expression-feature';
 import { useLive2DExpression } from '@/hooks/canvas/use-live2d-expression';
 import * as LAppDefine from '../../../WebSDK/src/lappdefine';
 
@@ -23,6 +24,7 @@ interface AudioTaskOptions {
   sliceLength: number
   displayText?: DisplayText | null
   expressions?: string[] | number[] | null
+  emotion?: string | null
 }
 
 /**
@@ -78,10 +80,16 @@ export const useAudioTask = () => {
       return;
     }
 
-    const { audioBase64, displayText, expressions } = options;
+    const {
+      audioBase64, displayText, expressions, emotion,
+    } = options;
 
-    // Update display text
+    // Keep the optional character emotion on the same queued task as the text
+    // so it changes only when this sentence is actually shown in the UI.
     if (displayText) {
+      if (emotion) {
+        void optionalExpressionFeature.setEmotion(emotion);
+      }
       appendText(displayText.text);
       appendAI(displayText.text, displayText.name, displayText.avatar);
       if (audioBase64) {

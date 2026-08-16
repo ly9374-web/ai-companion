@@ -22,18 +22,3 @@ export function OptionalSidebarTrigger(): JSX.Element | null {
 export function OptionalSidebarContent(): JSX.Element | null {
   return null;
 }
-
-export function OptionalGeneralSettings(_props: {
-  onSave?: (callback: () => void) => () => void;
-  onCancel?: (callback: () => void) => () => void;
-}): JSX.Element | null {
-  return null;
-}
-
-export function OptionalBackground({ fallback }: { fallback: ReactNode }) {
-  return fallback;
-}
-
-export function useOptionalBackgroundActive(): boolean {
-  return false;
-}

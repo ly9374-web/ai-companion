@@ -59,13 +59,23 @@ class DeepseekConfig(OpenAICompatibleConfig):
     base_url: str = Field("https://api.deepseek.com/v1", alias="base_url")
 
 
+class GrokConfig(OpenAICompatibleConfig):
+    """Configuration for xAI's OpenAI-compatible Grok API."""
+
+    base_url: str = Field("https://api.x.ai/v1", alias="base_url")
+
+
 class StatelessLLMConfigs(I18nMixin, BaseModel):
     """Pool of LLM provider configurations."""
 
     deepseek_llm: DeepseekConfig | None = Field(None, alias="deepseek_llm")
+    grok_llm: GrokConfig | None = Field(None, alias="grok_llm")
 
     DESCRIPTIONS: ClassVar[dict[str, Description]] = {
         "deepseek_llm": Description(
             en="Configuration for Deepseek API", zh="Deepseek API 配置"
+        ),
+        "grok_llm": Description(
+            en="Configuration for xAI Grok API", zh="xAI Grok API 配置"
         ),
     }

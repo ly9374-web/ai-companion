@@ -1,13 +1,13 @@
 const BASELINE_COUNTDOWN_MS = 3000;
 const BASELINE_WINDOW_MS = 1100;
-const SMOOTHING_WINDOW_MS = 550;
-const INFERENCE_STABILITY_MS = 650;
+const SMOOTHING_WINDOW_MS = 280;
+const EXPRESSION_STABILITY_MS = 280;
+const AMBIGUOUS_STABILITY_MS = 360;
+const NEUTRAL_STABILITY_MS = 450;
 const NEUTRAL_ACTIVITY_THRESHOLD = 0.055;
 const MIN_EXPRESSION_SCORE = 0.55;
 const MIN_SCORE_MARGIN = 0.10;
 const EXPRESSION_AU_TRIGGER_THRESHOLD = 0.13;
-const SUMMARY_NON_NEUTRAL_THRESHOLD = 0.10;
-const SUMMARY_CLOSE_MARGIN = 0.01;
 const IGNORED_INFERENCE_AUS = new Set(['AU43']);
 
 const EMOTION_TRIGGER_AUS = {
@@ -122,6 +122,12 @@ function inferenceLabels(result) {
   return Array.isArray(result?.emotions) ? result.emotions : [];
 }
 
+function stabilityDuration(result) {
+  if (result?.state === 'neutral') return NEUTRAL_STABILITY_MS;
+  if (result?.state === 'ambiguous') return AMBIGUOUS_STABILITY_MS;
+  return EXPRESSION_STABILITY_MS;
+}
+
 function auNumber(label) {
   const match = String(label).match(/\d+/);
   return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
@@ -154,6 +160,8 @@ export class EmotionTracker {
     this.windowLastUpdatedAt = 0;
     this.windowLastLabels = [];
     this.windowDurations = {};
+    this.windowEmotionSequence = [];
+    this.windowLastInferenceKey = '';
   }
 
   startCalibration() {
@@ -293,11 +301,14 @@ export class EmotionTracker {
     if (
       !this.stableInference
       || nextKey === stableKey
-      || now - this.inferenceCandidateSince >= INFERENCE_STABILITY_MS
+      || now - this.inferenceCandidateSince >= stabilityDuration(next)
     ) {
       this.accumulateWindowUntil(now);
       this.stableInference = next;
-      if (this.windowActive) this.windowLastLabels = inferenceLabels(next);
+      if (this.windowActive) {
+        this.windowLastLabels = inferenceLabels(next);
+        this.recordWindowInference(next);
+      }
       this.onLiveEmotion(next.emotions);
     }
   }
@@ -387,14 +398,27 @@ export class EmotionTracker {
     this.windowLastUpdatedAt = now;
   }
 
+  recordWindowInference(inference) {
+    if (!this.windowActive) return;
+    const labels = inferenceLabels(inference);
+    if (!labels.length) return;
+    const key = `${inference?.state || ''}:${labels.join('|')}`;
+    if (key === this.windowLastInferenceKey) return;
+    this.windowLastInferenceKey = key;
+    this.windowEmotionSequence.push([...labels]);
+  }
+
   startWindow() {
     this.windowRequested = true;
     this.windowDurations = {};
     this.windowLastUpdatedAt = performance.now();
     this.windowLastLabels = [];
+    this.windowEmotionSequence = [];
+    this.windowLastInferenceKey = '';
     this.windowActive = Boolean(this.baselineAu);
     if (this.windowActive && this.faceAvailable && this.stableInference) {
       this.windowLastLabels = inferenceLabels(this.stableInference);
+      this.recordWindowInference(this.stableInference);
     }
   }
 
@@ -403,6 +427,7 @@ export class EmotionTracker {
     this.windowRequested = false;
     this.windowActive = false;
     this.windowLastLabels = [];
+    this.windowLastInferenceKey = '';
     // Live AU inference intentionally stays active while the assistant speaks.
     // Only the request-scoped duration accumulator is paused here.
   }
@@ -414,27 +439,23 @@ export class EmotionTracker {
   aggregateWindow() {
     const totalDuration = Object.values(this.windowDurations)
       .reduce((sum, duration) => sum + duration, 0);
-    const nonNeutral = Object.entries(this.windowDurations)
-      .filter(([emotion, duration]) => (
-        emotion !== 'neutral'
-        && totalDuration > 0
-        && duration / totalDuration > SUMMARY_NON_NEUTRAL_THRESHOLD
-      ))
-      .sort((left, right) => right[1] - left[1]);
-
-    let emotions = ['neutral'];
-    if (nonNeutral.length) {
-      emotions = [nonNeutral[0][0]];
-      if (
-        nonNeutral[1]
-        && (nonNeutral[0][1] - nonNeutral[1][1]) / totalDuration
-          <= SUMMARY_CLOSE_MARGIN
+    const firstExpressionIndex = this.windowEmotionSequence
+      .findIndex((emotions) => !emotions.includes('neutral'));
+    let emotionSequence = [['neutral']];
+    if (firstExpressionIndex >= 0) {
+      let lastExpressionIndex = this.windowEmotionSequence.length - 1;
+      while (
+        lastExpressionIndex > firstExpressionIndex
+        && this.windowEmotionSequence[lastExpressionIndex].includes('neutral')
       ) {
-        emotions.push(nonNeutral[1][0]);
+        lastExpressionIndex -= 1;
       }
+      emotionSequence = this.windowEmotionSequence
+        .slice(firstExpressionIndex, lastExpressionIndex + 1)
+        .map((emotions) => [...emotions]);
     }
     return {
-      emotions,
+      emotion_sequence: emotionSequence,
       valid_duration_ms: Math.round(totalDuration),
     };
   }
@@ -445,12 +466,15 @@ export class EmotionTracker {
       this.windowActive = false;
       this.windowLastLabels = [];
       this.windowDurations = {};
+      this.windowEmotionSequence = [];
+      this.windowLastInferenceKey = '';
       return null;
     }
     this.accumulateWindowUntil();
     this.windowActive = false;
     this.windowRequested = false;
     this.windowLastLabels = [];
+    this.windowLastInferenceKey = '';
     return this.aggregateWindow();
   }
 
@@ -473,6 +497,8 @@ export class EmotionTracker {
     this.windowLastUpdatedAt = 0;
     this.windowLastLabels = [];
     this.windowDurations = {};
+    this.windowEmotionSequence = [];
+    this.windowLastInferenceKey = '';
     this.onLiveEmotion(null);
     this.onAuDeltas(null);
     this.onCalibrationState({ state: 'idle' });

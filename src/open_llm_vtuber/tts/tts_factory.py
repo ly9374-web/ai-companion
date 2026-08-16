@@ -13,7 +13,6 @@ class TTSFactory:
                 api_key=kwargs.get("api_key"),
                 model=kwargs.get("model"),
                 voice=kwargs.get("voice"),
-                language_hint=kwargs.get("language_hint"),
                 instruction=kwargs.get("instruction"),
                 sample_rate=kwargs.get("sample_rate"),
                 rate=kwargs.get("rate"),

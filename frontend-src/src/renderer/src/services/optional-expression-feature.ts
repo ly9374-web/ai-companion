@@ -1,3 +1,5 @@
+import { getCurrentBaseUrl } from '@/constants/connection-settings';
+
 interface RuntimeExpressionFeature {
   setEmotion: (emotion: string) => boolean;
   configureInteraction?: (options: ExpressionInteractionOptions) => void;
@@ -35,15 +37,7 @@ class OptionalExpressionFeatureBridge {
   }
 
   private getBaseUrl() {
-    const storedBaseUrl = window.localStorage.getItem('baseUrl');
-    if (storedBaseUrl) {
-      try {
-        return JSON.parse(storedBaseUrl) as string;
-      } catch (_error) {
-        // Keep the stable local backend default.
-      }
-    }
-    return 'http://127.0.0.1:12393';
+    return getCurrentBaseUrl();
   }
 
   private async ensureLoaded() {

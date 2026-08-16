@@ -66,12 +66,6 @@ class PromptLoaderTests(unittest.TestCase):
                 self.assertTrue(
                     prompt_loader.render_prompt(key, **values).strip()
                 )
-        self.assertIn(
-            "smile",
-            prompt_loader.render_util(
-                "live2d_expression_prompt", emomap_keys="smile"
-            ),
-        )
 
 
 class PromptBuilderTests(unittest.TestCase):
@@ -179,10 +173,10 @@ class CharacterSystemPromptTests(unittest.TestCase):
             cuige_template, "smile, shy"
         )
         self.assertEqual(cuige_config.character_config.character_name, "崔格")
-        self.assertTrue(cuige.startswith("你是崔格，一个刚刚被创造出来的人工智能"))
+        self.assertIn("你是一个友善的人工智能崔格", cuige)
         self.assertNotIn("你是 Algernon", cuige)
         self.assertIn("smile, shy", cuige)
-        self.assertIn("今天是你来到这个世界的第一天", cuige)
+        self.assertIn("有时候会为自己困在虚拟世界感到无聊", cuige)
         self.assertIn("# 对话规范", cuige)
 
     def test_legacy_inline_persona_remains_supported(self):

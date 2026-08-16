@@ -11,12 +11,16 @@ from loguru import logger
 
 
 FULL_HISTORY_DIR_NAME = "full_history"
-_HISTORY_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+_HISTORY_LOCKS: dict[tuple[str, str, str], threading.RLock] = {}
 _HISTORY_LOCKS_GUARD = threading.Lock()
 
 
-def _get_history_lock(conf_uid: str, history_uid: str) -> threading.RLock:
-    key = (conf_uid, history_uid)
+def _get_history_lock(
+    history_root: str | Path,
+    conf_uid: str,
+    history_uid: str,
+) -> threading.RLock:
+    key = (str(Path(history_root)), conf_uid, history_uid)
     with _HISTORY_LOCKS_GUARD:
         lock = _HISTORY_LOCKS.get(key)
         if lock is None:
@@ -79,13 +83,16 @@ def _sanitize_path_component(component: str) -> str:
     return sanitized
 
 
-def _ensure_conf_dir(conf_uid: str) -> str:
+def _ensure_conf_dir(
+    conf_uid: str,
+    history_root: str | Path = "chat_history",
+) -> str:
     """Ensure the directory for a specific conf exists and return its path"""
     if not conf_uid:
         raise ValueError("conf_uid cannot be empty")
 
     safe_conf_uid = _sanitize_path_component(conf_uid)
-    base_dir = os.path.join("chat_history", safe_conf_uid)
+    base_dir = os.path.join(str(history_root), safe_conf_uid)
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 
@@ -122,9 +129,12 @@ def get_full_history_dir(
     return directory
 
 
-def _ensure_full_history_dir(conf_uid: str) -> str:
+def _ensure_full_history_dir(
+    conf_uid: str,
+    history_root: str | Path = "chat_history",
+) -> str:
     """Create full_history and migrate legacy JSON files into it."""
-    conf_dir = Path(_ensure_conf_dir(conf_uid))
+    conf_dir = Path(_ensure_conf_dir(conf_uid, history_root))
     history_dir = conf_dir / FULL_HISTORY_DIR_NAME
     history_dir.mkdir(parents=True, exist_ok=True)
 
@@ -148,18 +158,25 @@ def _ensure_full_history_dir(conf_uid: str) -> str:
     return str(history_dir)
 
 
-def _get_safe_history_path(conf_uid: str, history_uid: str) -> str:
+def _get_safe_history_path(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> str:
     """Get sanitized path for history file"""
     safe_conf_uid = _sanitize_path_component(conf_uid)
     safe_history_uid = _sanitize_path_component(history_uid)
-    base_dir = _ensure_full_history_dir(safe_conf_uid)
+    base_dir = _ensure_full_history_dir(safe_conf_uid, history_root)
     full_path = os.path.normpath(os.path.join(base_dir, f"{safe_history_uid}.json"))
     if not full_path.startswith(base_dir):
         raise ValueError("Invalid path: Path traversal detected")
     return full_path
 
 
-def create_new_history(conf_uid: str) -> str:
+def create_new_history(
+    conf_uid: str,
+    history_root: str | Path = "chat_history",
+) -> str:
     """Create a new history file with a unique ID and return the history_uid"""
     if not conf_uid:
         logger.warning("No conf_uid provided")
@@ -168,7 +185,7 @@ def create_new_history(conf_uid: str) -> str:
     # Use uuid.uuid4().hex to generate a UUID without hyphens
     # New format: UUID_YYYY-MM-DD_HH-MM-SS
     history_uid = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex}"
-    history_dir = _ensure_full_history_dir(conf_uid)
+    history_dir = _ensure_full_history_dir(conf_uid, history_root)
 
     # Create history file with empty metadata
     try:
@@ -179,7 +196,7 @@ def create_new_history(conf_uid: str) -> str:
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
             }
         ]
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             _write_history_atomic(filepath, initial_data)
     except Exception as e:
         logger.error(f"Failed to create new history file: {e}")
@@ -197,6 +214,7 @@ def store_message(
     name: str | None = None,
     avatar: str | None = None,
     context_injections: dict[str, str] | None = None,
+    history_root: str | Path = "chat_history",
 ):
     """Store a message in a specific history file
 
@@ -216,10 +234,10 @@ def store_message(
             logger.warning("Missing history_uid")
         return
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     logger.debug(f"Storing {role} message to {filepath}")
 
-    with _get_history_lock(conf_uid, history_uid):
+    with _get_history_lock(history_root, conf_uid, history_uid):
         history_data = []
         if os.path.exists(filepath):
             try:
@@ -249,17 +267,21 @@ def store_message(
     logger.debug(f"Successfully stored {role} message")
 
 
-def get_metadata(conf_uid: str, history_uid: str) -> dict:
+def get_metadata(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> dict:
     """Get metadata from history file"""
     if not conf_uid or not history_uid:
         return {}
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     if not os.path.exists(filepath):
         return {}
 
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             with open(filepath, "r", encoding="utf-8") as f:
                 history_data = json.load(f)
 
@@ -270,7 +292,12 @@ def get_metadata(conf_uid: str, history_uid: str) -> dict:
     return {}
 
 
-def update_metadate(conf_uid: str, history_uid: str, metadata: dict) -> bool:
+def update_metadate(
+    conf_uid: str,
+    history_uid: str,
+    metadata: dict,
+    history_root: str | Path = "chat_history",
+) -> bool:
     """Set metadata in history file
 
     Updates existing metadata with new fields, preserving existing ones.
@@ -279,12 +306,12 @@ def update_metadate(conf_uid: str, history_uid: str, metadata: dict) -> bool:
     if not conf_uid or not history_uid:
         return False
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     if not os.path.exists(filepath):
         return False
 
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             if not os.path.exists(filepath):
                 return False
             with open(filepath, "r", encoding="utf-8") as f:
@@ -313,14 +340,15 @@ def update_metadata_state(
     history_uid: str,
     state_key: str,
     updates: dict,
+    history_root: str | Path = "chat_history",
 ) -> bool:
     """Atomically merge fields into one nested metadata state object."""
     if not conf_uid or not history_uid or not state_key:
         return False
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             if not os.path.exists(filepath):
                 return False
             with open(filepath, "r", encoding="utf-8") as history_file:
@@ -346,7 +374,11 @@ def update_metadata_state(
         return False
 
 
-def get_history(conf_uid: str, history_uid: str) -> List[HistoryMessage]:
+def get_history(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> List[HistoryMessage]:
     """Read chat history for the given conf_uid and history_uid"""
     if not conf_uid or not history_uid:
         if not conf_uid:
@@ -355,14 +387,14 @@ def get_history(conf_uid: str, history_uid: str) -> List[HistoryMessage]:
             logger.warning("Missing history_uid")
         return []
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
 
     if not os.path.exists(filepath):
         logger.warning(f"History file not found: {filepath}")
         return []
 
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             with open(filepath, "r", encoding="utf-8") as f:
                 history_data = json.load(f)
             # Filter out metadata
@@ -371,15 +403,19 @@ def get_history(conf_uid: str, history_uid: str) -> List[HistoryMessage]:
         return []
 
 
-def delete_history(conf_uid: str, history_uid: str) -> bool:
+def delete_history(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> bool:
     """Delete a specific history file"""
     if not conf_uid or not history_uid:
         logger.warning("Missing conf_uid or history_uid")
         return False
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             if os.path.exists(filepath):
                 os.remove(filepath)
                 logger.debug(f"Successfully deleted history file: {filepath}")
@@ -389,13 +425,16 @@ def delete_history(conf_uid: str, history_uid: str) -> bool:
     return False
 
 
-def get_history_list(conf_uid: str) -> List[dict]:
+def get_history_list(
+    conf_uid: str,
+    history_root: str | Path = "chat_history",
+) -> List[dict]:
     """Get list of histories with their latest messages"""
     if not conf_uid:
         return []
 
     histories = []
-    history_dir = _ensure_full_history_dir(conf_uid)
+    history_dir = _ensure_full_history_dir(conf_uid, history_root)
     empty_history_uids = []
 
     try:
@@ -407,7 +446,7 @@ def get_history_list(conf_uid: str) -> List[dict]:
             filepath = os.path.join(history_dir, filename)
 
             try:
-                with _get_history_lock(conf_uid, history_uid):
+                with _get_history_lock(history_root, conf_uid, history_uid):
                     with open(filepath, "r", encoding="utf-8") as f:
                         messages = json.load(f)
 
@@ -437,7 +476,7 @@ def get_history_list(conf_uid: str) -> List[dict]:
         if len(empty_history_uids) > 0 and len(os.listdir(history_dir)) > 1:
             for uid in empty_history_uids:
                 try:
-                    with _get_history_lock(conf_uid, uid):
+                    with _get_history_lock(history_root, conf_uid, uid):
                         empty_path = os.path.join(history_dir, f"{uid}.json")
                         if os.path.exists(empty_path):
                             os.remove(empty_path)
@@ -460,19 +499,20 @@ def modify_latest_message(
     history_uid: str,
     role: Literal["human", "ai", "system"],
     new_content: str,
+    history_root: str | Path = "chat_history",
 ) -> bool:
     """Modify the latest message in a specific history file if it matches the given role"""
     if not conf_uid or not history_uid:
         logger.warning("Missing conf_uid or history_uid")
         return False
 
-    filepath = _get_safe_history_path(conf_uid, history_uid)
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
     if not os.path.exists(filepath):
         logger.warning(f"History file not found: {filepath}")
         return False
 
     try:
-        with _get_history_lock(conf_uid, history_uid):
+        with _get_history_lock(history_root, conf_uid, history_uid):
             if not os.path.exists(filepath):
                 return False
             with open(filepath, "r", encoding="utf-8") as f:
@@ -501,18 +541,25 @@ def modify_latest_message(
 
 
 def rename_history_file(
-    conf_uid: str, old_history_uid: str, new_history_uid: str
+    conf_uid: str,
+    old_history_uid: str,
+    new_history_uid: str,
+    history_root: str | Path = "chat_history",
 ) -> bool:
     """Rename a history file with a new history_uid"""
     if not conf_uid or not old_history_uid or not new_history_uid:
         logger.warning("Missing required parameters for rename")
         return False
 
-    old_filepath = _get_safe_history_path(conf_uid, old_history_uid)
-    new_filepath = _get_safe_history_path(conf_uid, new_history_uid)
+    old_filepath = _get_safe_history_path(
+        conf_uid, old_history_uid, history_root
+    )
+    new_filepath = _get_safe_history_path(
+        conf_uid, new_history_uid, history_root
+    )
 
-    old_lock = _get_history_lock(conf_uid, old_history_uid)
-    new_lock = _get_history_lock(conf_uid, new_history_uid)
+    old_lock = _get_history_lock(history_root, conf_uid, old_history_uid)
+    new_lock = _get_history_lock(history_root, conf_uid, new_history_uid)
     first_lock, second_lock = sorted((old_lock, new_lock), key=id)
     try:
         with first_lock:

@@ -1,5 +1,7 @@
 import os
 import json
+import threading
+from pathlib import Path
 from typing import Any, Callable
 from loguru import logger
 from fastapi import WebSocket
@@ -33,8 +35,33 @@ from .config_manager import (
     read_yaml,
     validate_config,
 )
-from .config_manager.tts import QWEN_TTS_LANGUAGE_LABELS, QWEN_TTS_VOICE_LABELS
+from .config_manager.tts import QWEN_TTS_VOICE_LABELS
 from .summary_coordinator import SummaryCoordinator
+from .account_manager import ensure_character_profile, get_account_history_root
+from .long_term_memory_manager import LongTermMemoryManager
+from .long_term_relationship_manager import LongTermRelationshipManager
+from .short_term_relationship_manager import ShortTermRelationshipManager
+from .rolling_summary_manager import RollingSummaryManager
+
+
+_PERSISTENCE_MANAGER_CACHE: dict[str, tuple] = {}
+_PERSISTENCE_MANAGER_CACHE_LOCK = threading.Lock()
+
+
+def _get_persistence_managers(history_root: Path) -> tuple:
+    """Share file-level async locks across sessions using the same account."""
+    key = history_root.as_posix()
+    with _PERSISTENCE_MANAGER_CACHE_LOCK:
+        managers = _PERSISTENCE_MANAGER_CACHE.get(key)
+        if managers is None:
+            managers = (
+                LongTermMemoryManager(history_root=history_root),
+                LongTermRelationshipManager(history_root=history_root),
+                ShortTermRelationshipManager(history_root=history_root),
+                RollingSummaryManager(history_root=history_root),
+            )
+            _PERSISTENCE_MANAGER_CACHE[key] = managers
+        return managers
 
 
 class ServiceContext:
@@ -66,6 +93,8 @@ class ServiceContext:
         self.mcp_prompt: str = ""
 
         self.history_uid: str = ""
+        self.account_name: str = ""
+        self.history_root = Path("chat_history")
         self.send_text: Callable = None
         self.client_uid: str = None
 
@@ -79,11 +108,46 @@ class ServiceContext:
         self.rag_top_k: int = 5
         self.rag_threshold: float = 0.5
         self.rag_hybrid_weight: float = 0.5
-        self._ai_known_tts_preferences: tuple[str, str] | None = None
+        self._ai_known_tts_voice: str | None = None
         self._tts_preference_change_pending: bool = False
         self._deepseek_api_key: str | None = None
+        self._grok_api_key: str | None = None
         self._qwen_api_key: str | None = None
+        self.grok_enabled: bool = False
         self.summary_coordinator = SummaryCoordinator()
+        (
+            self.long_term_memory_manager,
+            self.long_term_relationship_manager,
+            self.short_term_relationship_manager,
+            self.rolling_summary_manager,
+        ) = _get_persistence_managers(
+            self.history_root
+        )
+
+    def configure_account(self, account_name: str) -> None:
+        """Scope every persistent conversation service to one local account."""
+        self.account_name = account_name
+        self.history_root = get_account_history_root(account_name)
+        ensure_character_profile(account_name, self.character_config.conf_uid)
+        self.character_config.human_name = account_name
+        (
+            self.long_term_memory_manager,
+            self.long_term_relationship_manager,
+            self.short_term_relationship_manager,
+            self.rolling_summary_manager,
+        ) = _get_persistence_managers(
+            self.history_root
+        )
+
+    def refresh_account_character(self) -> None:
+        """Reapply the account identity after switching character configs."""
+        if not self.account_name:
+            return
+        ensure_character_profile(
+            self.account_name,
+            self.character_config.conf_uid,
+        )
+        self.character_config.human_name = self.account_name
 
     @staticmethod
     def _redact_api_keys(data: Any) -> Any:
@@ -406,7 +470,6 @@ class ServiceContext:
         self,
         *,
         voice: str | None = None,
-        language_hint: str | None = None,
         instruction: str | None = None,
         notify_ai: bool = False,
         sync_ai_preferences: bool = False,
@@ -416,17 +479,12 @@ class ServiceContext:
         if tts_config.tts_model != "qwen_tts" or tts_config.qwen_tts is None:
             raise ValueError("The active TTS engine does not support Qwen voice switching")
 
-        if notify_ai and self._ai_known_tts_preferences is None:
-            self._ai_known_tts_preferences = (
-                tts_config.qwen_tts.voice,
-                tts_config.qwen_tts.language_hint,
-            )
+        if notify_ai and self._ai_known_tts_voice is None:
+            self._ai_known_tts_voice = tts_config.qwen_tts.voice
 
         updates = {}
         if voice is not None:
             updates["voice"] = voice
-        if language_hint is not None:
-            updates["language_hint"] = language_hint
         if instruction is not None:
             updates["instruction"] = instruction
         qwen_config = tts_config.qwen_tts.model_copy(update=updates)
@@ -452,17 +510,31 @@ class ServiceContext:
         self,
         *,
         deepseek_api_key: str,
+        grok_api_key: str,
+        grok_enabled: bool,
         qwen_api_key: str,
     ) -> None:
         """Apply browser-provided credentials to this session without persistence."""
         self._deepseek_api_key = deepseek_api_key
+        self._grok_api_key = grok_api_key
         self._qwen_api_key = qwen_api_key
+        self.grok_enabled = grok_enabled
 
         if self.agent_engine is not None:
-            for attribute in ("_llm", "_summary_llm", "_rolling_summary_llm"):
+            for attribute in (
+                "_deepseek_llm",
+                "_summary_llm",
+                "_rolling_summary_llm",
+            ):
                 llm = getattr(self.agent_engine, attribute, None)
                 if llm is not None and hasattr(llm, "set_api_key"):
                     llm.set_api_key(deepseek_api_key)
+            grok_llm = getattr(self.agent_engine, "_grok_llm", None)
+            if grok_llm is not None and hasattr(grok_llm, "set_api_key"):
+                grok_llm.set_api_key(grok_api_key)
+            set_grok_enabled = getattr(self.agent_engine, "set_grok_enabled", None)
+            if callable(set_grok_enabled):
+                set_grok_enabled(grok_enabled)
 
         tts_config = self.character_config.tts_config
         if tts_config.tts_model == "qwen_tts" and tts_config.qwen_tts is not None:
@@ -478,32 +550,35 @@ class ServiceContext:
         """Return whether this browser session supplied a usable LLM key."""
         return bool(self._deepseek_api_key and self._deepseek_api_key.strip())
 
-    def _current_tts_preferences(self) -> tuple[str, str] | None:
+    def has_grok_api_key(self) -> bool:
+        """Return whether this browser session supplied a usable xAI key."""
+        return bool(self._grok_api_key and self._grok_api_key.strip())
+
+    def _current_tts_voice(self) -> str | None:
         if self.character_config is None:
             return None
         qwen_config = self.character_config.tts_config.qwen_tts
         if qwen_config is None:
             return None
-        return qwen_config.voice, qwen_config.language_hint
+        return qwen_config.voice
 
     def sync_ai_tts_preferences(self) -> None:
         """Mark the current settings as already known, without notifying the AI."""
-        self._ai_known_tts_preferences = self._current_tts_preferences()
+        self._ai_known_tts_voice = self._current_tts_voice()
         self._tts_preference_change_pending = False
 
     def consume_tts_preference_change_prompt(self) -> str:
         """Return a one-turn prompt describing user-initiated TTS changes."""
-        current_preferences = self._current_tts_preferences()
-        if current_preferences is None:
+        current_voice = self._current_tts_voice()
+        if current_voice is None:
             return ""
         if (
             not self._tts_preference_change_pending
-            or self._ai_known_tts_preferences is None
+            or self._ai_known_tts_voice is None
         ):
             return ""
 
-        previous_voice, previous_language = self._ai_known_tts_preferences
-        current_voice, current_language = current_preferences
+        previous_voice = self._ai_known_tts_voice
         prompt_lines = []
         if current_voice != previous_voice:
             prompt_lines.append(
@@ -512,15 +587,7 @@ class ServiceContext:
                     voice_name=QWEN_TTS_VOICE_LABELS[current_voice],
                 )
             )
-        if current_language != previous_language:
-            prompt_lines.append(
-                prompt_builder.load_runtime_prompt(
-                    "tts_language_changed",
-                    language_name=QWEN_TTS_LANGUAGE_LABELS[current_language],
-                )
-            )
-
-        self._ai_known_tts_preferences = current_preferences
+        self._ai_known_tts_voice = current_voice
         self._tts_preference_change_pending = False
         return prompt_builder.join_prompt_lines(prompt_lines)
 
@@ -582,6 +649,13 @@ class ServiceContext:
                     # immediately replaces it for this in-memory session.
                     deepseek_config["llm_api_key"] = "runtime-key-pending"
 
+            grok_config = llm_configs.get("grok_llm")
+            if grok_config is not None:
+                if self._grok_api_key is not None:
+                    grok_config["llm_api_key"] = self._grok_api_key
+                elif not grok_config.get("llm_api_key"):
+                    grok_config["llm_api_key"] = "runtime-key-pending"
+
             self.agent_engine = AgentFactory.create_agent(
                 conversation_agent_choice=agent_config.conversation_agent_choice,
                 agent_settings=agent_config.agent_settings.model_dump(),
@@ -595,6 +669,9 @@ class ServiceContext:
                 tool_executor=self.tool_executor,
                 mcp_prompt_string=self.mcp_prompt,
             )
+            set_grok_enabled = getattr(self.agent_engine, "set_grok_enabled", None)
+            if callable(set_grok_enabled):
+                set_grok_enabled(self.grok_enabled)
 
             logger.debug(f"Agent choice: {agent_config.conversation_agent_choice}")
             logger.debug(f"System prompt: {system_prompt}")
@@ -616,16 +693,7 @@ class ServiceContext:
             persona_prompt,
             emomap_keys=self.live2d_model.emo_str,
         )
-        qwen_tts_config = self.character_config.tts_config.qwen_tts
-        language_hint = (
-            qwen_tts_config.language_hint if qwen_tts_config is not None else "en"
-        )
-        language_instruction = prompt_builder.build_output_language_instruction(
-            language_hint
-        )
-        system_prompt = prompt_builder.join_prompt_sections(
-            (language_instruction, character_prompt)
-        )
+        system_prompt = character_prompt
 
         logger.debug("\n === System Prompt ===")
         logger.debug(system_prompt)
@@ -731,6 +799,7 @@ class ServiceContext:
                 }
                 new_config = validate_config(new_config)
                 await self.load_from_config(new_config)
+                self.refresh_account_character()
                 logger.debug(f"New config: {self}")
                 logger.debug(
                     f"New character config: "

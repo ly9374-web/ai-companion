@@ -10,12 +10,10 @@ import {
 import {
   getStoredImageCompressionQuality,
   getStoredImageMaxWidth,
-  IMAGE_COMPRESSION_QUALITY_KEY,
-  IMAGE_MAX_WIDTH_KEY,
+  setCurrentImageSettings,
 } from '@/constants/image-settings';
 import { InputField, SelectField } from './common';
 import { settingStyles } from './setting-styles';
-import { useOptionalBackgroundActive } from '@optional-feature';
 
 interface TTSProps {
   onSave?: (callback: () => void) => () => void;
@@ -35,7 +33,6 @@ interface SynthesisSettings {
 function TTS({ onSave, onCancel }: TTSProps): JSX.Element {
   const { t } = useTranslation();
   const bgUrlContext = useBgUrl();
-  const optionalBackgroundActive = useOptionalBackgroundActive();
   const {
     wsUrl,
     setWsUrl,
@@ -81,18 +78,14 @@ function TTS({ onSave, onCancel }: TTSProps): JSX.Element {
 
     setWsUrl(settings.wsUrl);
     setBaseUrl(settings.baseUrl);
-    localStorage.setItem(
-      IMAGE_COMPRESSION_QUALITY_KEY,
-      settings.imageCompressionQuality.toString(),
-    );
-    localStorage.setItem(
-      IMAGE_MAX_WIDTH_KEY,
-      settings.imageMaxWidth.toString(),
-    );
   }, [settings, bgUrlContext, setWsUrl, setBaseUrl]);
 
   const handleSave = useCallback((): void => {
     setOriginalSettings(settings);
+    setCurrentImageSettings(
+      settings.imageCompressionQuality,
+      settings.imageMaxWidth,
+    );
   }, [settings]);
 
   const handleCancel = useCallback((): void => {
@@ -123,36 +116,32 @@ function TTS({ onSave, onCancel }: TTSProps): JSX.Element {
 
   return (
     <Stack {...settingStyles.common.container}>
-      {!optionalBackgroundActive && (
-        <>
-          <SelectField
-            label={t('settings.tts.backgroundImage')}
-            value={settings.selectedBgUrl}
-            onChange={(value) => {
-              setSettings((previous) => ({
-                ...previous,
-                selectedBgUrl: value,
-                customBgUrl: '',
-              }));
-            }}
-            collection={backgrounds}
-            placeholder={t('settings.tts.backgroundImage')}
-          />
+      <SelectField
+        label={t('settings.tts.backgroundImage')}
+        value={settings.selectedBgUrl}
+        onChange={(value) => {
+          setSettings((previous) => ({
+            ...previous,
+            selectedBgUrl: value,
+            customBgUrl: '',
+          }));
+        }}
+        collection={backgrounds}
+        placeholder={t('settings.tts.backgroundImage')}
+      />
 
-          <InputField
-            label={t('settings.tts.customBgUrl')}
-            value={settings.customBgUrl}
-            onChange={(value) => {
-              setSettings((previous) => ({
-                ...previous,
-                customBgUrl: value,
-                selectedBgUrl: value ? [] : previous.selectedBgUrl,
-              }));
-            }}
-            placeholder={t('settings.tts.customBgUrlPlaceholder')}
-          />
-        </>
-      )}
+      <InputField
+        label={t('settings.tts.customBgUrl')}
+        value={settings.customBgUrl}
+        onChange={(value) => {
+          setSettings((previous) => ({
+            ...previous,
+            customBgUrl: value,
+            selectedBgUrl: value ? [] : previous.selectedBgUrl,
+          }));
+        }}
+        placeholder={t('settings.tts.customBgUrlPlaceholder')}
+      />
 
       <InputField
         label={t('settings.tts.wsUrl')}

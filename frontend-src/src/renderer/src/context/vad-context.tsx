@@ -398,6 +398,20 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     isProcessingRef.current = false;
   }, []);
 
+  useEffect(() => () => {
+    manualSpeechActiveRef.current = false;
+    manualSpeechFramesRef.current = [];
+    recentAudioFramesRef.current = [];
+    activeSpeechFramesRef.current = [];
+    isProcessingRef.current = false;
+    if (vadRef.current) {
+      vadRef.current.pause();
+      vadRef.current.destroy();
+      vadRef.current = null;
+    }
+    micOnRef.current = false;
+  }, []);
+
   /**
    * Start a manual speech segment controlled by holding the space key.
    * The microphone must already be active; this never opens it implicitly.

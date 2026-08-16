@@ -14,7 +14,7 @@ SUPPORTED_EMOTIONS = {
     "disgust",
 }
 EMOTION_LABELS_ZH = {
-    "neutral": "中性",
+    "neutral": "平静",
     "happy": "开心",
     "sad": "悲伤",
     "angry": "愤怒",
@@ -31,22 +31,30 @@ def build_request_context(optional_contexts: Any) -> str:
     if not isinstance(aggregate, dict):
         return ""
 
-    raw_emotions = aggregate.get("emotions")
-    if not isinstance(raw_emotions, list) or not 1 <= len(raw_emotions) <= 2:
+    raw_sequence = aggregate.get("emotion_sequence")
+    if not isinstance(raw_sequence, list) or not 1 <= len(raw_sequence) <= 512:
         return ""
 
-    emotions: list[str] = []
-    for raw_emotion in raw_emotions:
-        if not isinstance(raw_emotion, str):
+    sequence: list[list[str]] = []
+    for raw_emotions in raw_sequence:
+        if not isinstance(raw_emotions, list) or not 1 <= len(raw_emotions) <= 2:
             return ""
-        emotion = raw_emotion.strip().lower()
-        if emotion not in SUPPORTED_EMOTIONS or emotion in emotions:
+        emotions: list[str] = []
+        for raw_emotion in raw_emotions:
+            if not isinstance(raw_emotion, str):
+                return ""
+            emotion = raw_emotion.strip().lower()
+            if emotion not in SUPPORTED_EMOTIONS or emotion in emotions:
+                return ""
+            emotions.append(emotion)
+        if "neutral" in emotions and len(emotions) != 1:
             return ""
-        emotions.append(emotion)
+        sequence.append(emotions)
 
-    # Neutral is always a single fallback result, never part of an ambiguous pair.
-    if "neutral" in emotions and len(emotions) != 1:
-        return ""
+    if len(sequence) > 1:
+        # Mixed neutral stages are meaningful only between two expression stages.
+        if "neutral" in sequence[0] or "neutral" in sequence[-1]:
+            return ""
 
     valid_duration_ms = aggregate.get("valid_duration_ms")
     if (
@@ -56,5 +64,9 @@ def build_request_context(optional_contexts: Any) -> str:
     ):
         return ""
 
-    label = "或".join(EMOTION_LABELS_ZH[emotion] for emotion in emotions)
-    return f"你能看到用户当前的表情为：{label}"
+    labels = [
+        "或".join(EMOTION_LABELS_ZH[emotion] for emotion in emotions)
+        for emotions in sequence
+    ]
+    label = labels[0] if len(labels) == 1 else f"先{'转为'.join(labels)}"
+    return f"用户当前的表情为：{label}"

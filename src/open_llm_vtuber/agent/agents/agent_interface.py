@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import AsyncIterator
 from loguru import logger
 
@@ -43,12 +44,18 @@ class AgentInterface(ABC):
         pass
 
     @abstractmethod
-    def set_memory_from_history(self, conf_uid: str, history_uid: str) -> None:
+    def set_memory_from_history(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        history_root: str | Path = "chat_history",
+    ) -> None:
         """
         Load the agent's working memory from chat history
 
         Args:
             conf_uid: str - Configuration ID
             history_uid: str - History ID
+            history_root: Root directory for the active account
         """
         pass

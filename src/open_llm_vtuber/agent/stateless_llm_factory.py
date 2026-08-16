@@ -17,7 +17,7 @@ class LLMFactory:
         """
         logger.info(f"Initializing LLM: {llm_provider}")
 
-        if llm_provider == "deepseek_llm":
+        if llm_provider in {"deepseek_llm", "grok_llm"}:
             return OpenAICompatibleLLM(
                 model=kwargs.get("model"),
                 base_url=kwargs.get("base_url"),

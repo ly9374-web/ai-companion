@@ -37,11 +37,6 @@ QWEN_TTS_VOICE_LABELS = {
     "qwen-audio-3.0-tts-flash-longhongweifeng": "龙鸿薇枫",
     "qwen-audio-3.0-tts-flash-longfengxiuche": "龙凤岫澈",
 }
-QwenTTSLanguageHint = Literal["en", "zh"]
-QWEN_TTS_LANGUAGE_HINTS = frozenset(QwenTTSLanguageHint.__args__)
-QWEN_TTS_LANGUAGE_LABELS = {"en": "英文", "zh": "中文"}
-
-
 class QwenTTSConfig(I18nMixin):
     """Configuration for Qwen-Audio Flash TTS."""
 
@@ -56,7 +51,6 @@ class QwenTTSConfig(I18nMixin):
     voice: QwenTTSVoice = Field(
         "qwen-audio-3.0-tts-flash-longyuyaoluan", alias="voice"
     )
-    language_hint: QwenTTSLanguageHint = Field("en", alias="language_hint")
     instruction: str = Field("", max_length=2000, alias="instruction")
     sample_rate: Literal[24000] = Field(24000, alias="sample_rate")
     rate: float = Field(1.0, ge=0.5, le=2.0, alias="rate")
@@ -76,10 +70,6 @@ class QwenTTSConfig(I18nMixin):
         ),
         "voice": Description(
             en="Qwen-Audio Flash voice ID", zh="Qwen-Audio Flash 音色 ID"
-        ),
-        "language_hint": Description(
-            en="Language hint sent to Qwen-Audio Flash",
-            zh="发送给 Qwen-Audio Flash 的语言提示",
         ),
         "instruction": Description(
             en="Optional natural-language speaking instruction",

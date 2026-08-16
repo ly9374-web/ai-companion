@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import tempfile
@@ -99,6 +100,11 @@ class LongTermMemoryManager:
             lock = asyncio.Lock()
             self._summary_locks[key] = lock
         return lock
+
+    def _rag_scope_uid(self, conf_uid: str) -> str:
+        if self.history_root == Path("chat_history"):
+            return conf_uid
+        return f"{self.history_root.as_posix()}::{conf_uid}"
 
     @staticmethod
     def _normalize_text(value: object) -> str:
@@ -365,28 +371,37 @@ class LongTermMemoryManager:
             try:
                 await asyncio.to_thread(
                     memory_rag_store.sync,
-                    conf_uid,
+                    self._rag_scope_uid(conf_uid),
                     [memory.to_rag_memory() for memory in memories],
                 )
             except Exception as exc:
                 logger.error("Failed to update the long-term memory RAG index: {}", exc)
         return memories
 
-    @staticmethod
-    def _get_state(conf_uid: str, history_uid: str) -> dict:
-        metadata = get_metadata(conf_uid, history_uid)
+    def _get_state(self, conf_uid: str, history_uid: str) -> dict:
+        if "history_root" in inspect.signature(get_metadata).parameters:
+            metadata = get_metadata(
+                conf_uid,
+                history_uid,
+                history_root=self.history_root,
+            )
+        else:
+            metadata = get_metadata(conf_uid, history_uid)
         state = metadata.get(LONG_TERM_MEMORY_METADATA_KEY, {})
         if not isinstance(state, dict):
             return {}
         return state.copy()
 
-    @staticmethod
-    def _save_state(conf_uid: str, history_uid: str, state: dict) -> bool:
-        return update_metadate(
-            conf_uid,
-            history_uid,
-            {LONG_TERM_MEMORY_METADATA_KEY: state},
-        )
+    def _save_state(self, conf_uid: str, history_uid: str, state: dict) -> bool:
+        metadata = {LONG_TERM_MEMORY_METADATA_KEY: state}
+        if "history_root" in inspect.signature(update_metadate).parameters:
+            return update_metadate(
+                conf_uid,
+                history_uid,
+                metadata,
+                history_root=self.history_root,
+            )
+        return update_metadate(conf_uid, history_uid, metadata)
 
     async def retrieve_injection(
         self,
@@ -400,31 +415,13 @@ class LongTermMemoryManager:
         """Retrieve content for this request without adding it to chat history."""
         if not conf_uid or not query.strip():
             return ""
-        mode = (
-            "keyword"
-            if hybrid_weight == 0.0
-            else "vector"
-            if hybrid_weight == 1.0
-            else "hybrid"
-        )
-        threshold_log = "ignored" if hybrid_weight == 0.0 else f"{threshold:.2f}"
         memories = await self.read_memories(conf_uid)
         if not memories:
-            logger.info(
-                "Long-term memory RAG for character {}: mode={} top_k={} "
-                "threshold={} hybrid_weight={:.2f} recalled=0 "
-                "(no long-term memories)",
-                conf_uid,
-                mode,
-                top_k,
-                threshold_log,
-                hybrid_weight,
-            )
             return ""
         try:
             retrieved = await asyncio.to_thread(
                 memory_rag_store.retrieve,
-                conf_uid,
+                self._rag_scope_uid(conf_uid),
                 query,
                 [memory.to_rag_memory() for memory in memories],
                 top_k=max(1, min(20, int(top_k))),
@@ -434,27 +431,6 @@ class LongTermMemoryManager:
         except Exception as exc:
             logger.error("Long-term memory retrieval failed: {}", exc)
             return ""
-        logger.info(
-            "Long-term memory RAG for character {}: mode={} top_k={} "
-            "threshold={} hybrid_weight={:.2f} recalled={}",
-            conf_uid,
-            mode,
-            top_k,
-            threshold_log,
-            hybrid_weight,
-            len(retrieved),
-        )
-        for index, memory in enumerate(retrieved, start=1):
-            logger.info(
-                "Recalled long-term memory {}/{}: count={:03d} type={} "
-                "reference={} content={}",
-                index,
-                len(retrieved),
-                memory.count,
-                memory.type,
-                memory.reference,
-                memory.content,
-            )
         return prompt_builder.build_memory_injection(
             memory.content for memory in retrieved
         )

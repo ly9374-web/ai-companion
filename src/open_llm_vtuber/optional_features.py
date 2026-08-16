@@ -164,6 +164,8 @@ def process_expression_output(display_text: str, tts_text: str) -> dict[str, Any
             )
         ):
             return fallback
+        if emotion is not None:
+            logger.info("已识别并隐藏情绪字段：当前情绪为：{}", emotion)
         return {
             "display_text": cleaned_display,
             "tts_text": cleaned_tts,

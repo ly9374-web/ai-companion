@@ -6,6 +6,17 @@
     "close": "Close",
     "accept": "Accept"
   },
+  "account": {
+    "login": "Log in",
+    "register": "Register",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "logout": "Log out",
+    "loginPlaceholder": "Enter your account",
+    "registerPlaceholder": "What would you like to be called?",
+    "operationFailed": "Account operation failed",
+    "restoreDefaultConnection": "Restore default connection"
+  },
   "settings": {
     "tabs": {
       "general": "General",
@@ -18,7 +29,6 @@
     "general": {
       "language": "Language",
       "ttsVoice": "Voice",
-      "ttsLanguageHint": "Language Hint",
       "ttsInstruction": "Speech Instruction",
       "ttsInstructionNone": "None (Default)",
       "generateAudio": "Generate Voice",
@@ -28,7 +38,8 @@
       "maxHistoryTurns": "Context History Turns",
       "maxHistoryTurnsHelp": "Number of completed user-assistant turns included as context in each model request. The current message is added separately. Range: 1-100; default: 8.",
       "debugMode": "Debug",
-      "debugModeHelp": "When enabled, chats are still saved, but rolling, long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be summarized later after debug mode is disabled."
+      "debugModeHelp": "When enabled, chats are still saved, but rolling, long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be summarized later after debug mode is disabled.",
+      "rollingSummary": "Rolling Summary"
     },
     "tts": {
       "backgroundImage": "Background Image",
@@ -48,6 +59,10 @@
     "key": {
       "deepseek": "DeepSeek Key",
       "deepseekPlaceholder": "Enter DeepSeek Key",
+      "grok": "Grok Key",
+      "grokPlaceholder": "Enter xAI Grok Key",
+      "grokEnabled": "Use Grok for Chat",
+      "grokEnabledHelp": "When enabled, only interactive model chat uses Grok. Long-term memory, long-term relationship, short-term relationship, and rolling summaries continue to use DeepSeek. This switch turns off after a page reload or a new page session.",
       "qwen": "Qwen Key",
       "qwenPlaceholder": "Enter Qwen Key"
     },
@@ -103,13 +118,20 @@
     "newChatHistory": "New chat history created",
     "historyDeleteSuccess": "History deleted successfully",
     "historyDeleteFail": "Failed to delete history",
+    "settingsSaved": "Settings saved",
     "manualSummaryRunning": "Summarizing long-term memory and short-term relationship…",
     "manualSummaryComplete": "Summary complete; the next automatic summary starts from zero",
     "manualSummaryEmpty": "Nothing to summarize yet",
     "manualSummaryPartialFailure": "Part of the summary failed; successful items were reset",
     "manualSummaryFailed": "Summary failed. Please try again later",
     "manualSummaryDisabled": "Memory summaries are disabled in debug mode",
-    "manualSummaryDuplicate": "A summary is already running; no duplicate is needed"
+    "manualSummaryDuplicate": "A summary is already running; no duplicate is needed",
+    "rollingSummaryRunning": "Generating rolling summary…",
+    "rollingSummaryComplete": "Rolling summary updated",
+    "rollingSummaryEmpty": "No chat outside the direct context is available to summarize",
+    "rollingSummaryFailed": "Rolling summary failed. Please try again later",
+    "rollingSummaryDuplicate": "A rolling summary is already running",
+    "rollingSummaryDebugOnly": "Enable debug mode first"
   },
   "error": {
     "failedStartScreenCapture": "Failed to start screen capture",
@@ -122,6 +144,7 @@
     "failedParseWebSocket": "Failed to parse WebSocket message",
     "websocketNotOpen": "WebSocket is not open.",
     "deepseekApiKeyRequired": "Add your DeepSeek Key in Settings → Key before sending a message.",
+    "grokApiKeyRequired": "Grok is enabled. Add your Grok Key in Settings → Key before sending a message.",
     "vadMisfire": "Voice detected but too brief. Try speaking louder/longer, or adjust settings (lower speech threshold, lower negative threshold, reduce redemption frames)."
   },
   "aiState": {

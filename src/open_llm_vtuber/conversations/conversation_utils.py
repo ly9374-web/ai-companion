@@ -66,15 +66,6 @@ async def process_agent_output(
             )
             output.display_text.text = expression_result["display_text"]
             output.tts_text = expression_result["tts_text"]
-            if expression_result["emotion"]:
-                await websocket_send(
-                    json.dumps(
-                        {
-                            "type": "expression-update",
-                            "emotion": expression_result["emotion"],
-                        }
-                    )
-                )
             full_response = await handle_sentence_output(
                 output,
                 live2d_model,
@@ -83,6 +74,7 @@ async def process_agent_output(
                 tts_manager,
                 translate_engine,
                 generate_audio,
+                expression_result["emotion"],
             )
         elif isinstance(output, AudioOutput):
             full_response = await handle_audio_output(output, websocket_send)
@@ -107,6 +99,7 @@ async def handle_sentence_output(
     tts_manager: TTSTaskManager,
     translate_engine: Optional[Any] = None,
     generate_audio: bool = True,
+    emotion: Optional[str] = None,
 ) -> str:
     """Handle sentence output type with optional translation support"""
     full_response = ""
@@ -129,6 +122,7 @@ async def handle_sentence_output(
                 live2d_model=live2d_model,
                 tts_engine=tts_engine,
                 websocket_send=websocket_send,
+                emotion=emotion,
             )
         else:
             # Preserve the existing frontend protocol while omitting TTS. The
@@ -139,6 +133,7 @@ async def handle_sentence_output(
                         audio_path=None,
                         display_text=display_text,
                         actions=actions,
+                        emotion=emotion,
                     )
                 )
             )

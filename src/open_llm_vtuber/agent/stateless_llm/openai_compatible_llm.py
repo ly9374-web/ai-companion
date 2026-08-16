@@ -3,6 +3,8 @@ This class is responsible for handling asynchronous interaction with OpenAI API 
 endpoints for language generation.
 """
 
+import json
+from itertools import count
 from typing import AsyncIterator, List, Dict, Any
 from openai import (
     AsyncStream,
@@ -19,6 +21,9 @@ from loguru import logger
 
 from .stateless_llm_interface import StatelessLLMInterface
 from ...mcpp.types import ToolCallObject
+
+
+_REQUEST_IDS = count(1)
 
 
 class AsyncLLM(StatelessLLMInterface):
@@ -57,6 +62,58 @@ class AsyncLLM(StatelessLLMInterface):
             f"Initialized AsyncLLM with the parameters: {self.base_url}, {self.model}"
         )
 
+    @staticmethod
+    def _sanitize_for_log(value: Any) -> Any:
+        """Keep requests readable without dumping base64 image payloads."""
+        if isinstance(value, dict):
+            return {
+                key: AsyncLLM._sanitize_for_log(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [AsyncLLM._sanitize_for_log(item) for item in value]
+        if isinstance(value, str) and value.startswith("data:image"):
+            return f"[image data omitted: {len(value)} characters]"
+        return value
+
+    def _log_completion_input(
+        self,
+        request_id: int,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | NotGiven,
+    ) -> None:
+        payload = {
+            "request_id": request_id,
+            "model": self.model,
+            "base_url": self.base_url,
+            "temperature": self.temperature,
+            "messages": self._sanitize_for_log(messages),
+        }
+        if tools is not NOT_GIVEN:
+            payload["tools"] = self._sanitize_for_log(tools)
+        logger.info(
+            "LLM INPUT\n{}",
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        )
+
+    def _log_completion_output(
+        self,
+        request_id: int,
+        text_parts: List[str],
+        tool_calls: List[Dict[str, Any]],
+    ) -> None:
+        payload = {
+            "request_id": request_id,
+            "model": self.model,
+            "content": "".join(text_parts),
+        }
+        if tool_calls:
+            payload["tool_calls"] = tool_calls
+        logger.info(
+            "LLM OUTPUT\n{}",
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        )
+
     async def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -84,6 +141,10 @@ class AsyncLLM(StatelessLLMInterface):
         # Tool call related state variables
         accumulated_tool_calls = {}
         in_tool_call = False
+        output_text_parts: List[str] = []
+        output_tool_calls: List[Dict[str, Any]] = []
+        output_logged = False
+        request_id = next(_REQUEST_IDS)
 
         try:
             # If system prompt is provided, add it to the messages
@@ -93,32 +154,8 @@ class AsyncLLM(StatelessLLMInterface):
                     {"role": "system", "content": system},
                     *messages,
                 ]
-            # Log the complete content sent to the model
-            _log_messages = []
-            for _msg in messages_with_system:
-                _role = _msg.get("role", "unknown")
-                _content = _msg.get("content", "")
-                if isinstance(_content, list):
-                    _parts = []
-                    for _item in _content:
-                        if isinstance(_item, dict) and _item.get("type") == "text":
-                            _parts.append(_item.get("text", ""))
-                        elif isinstance(_item, dict) and _item.get("type") == "image_url":
-                            _parts.append("[图片]")
-                    _content = " ".join(_parts)
-                _log_messages.append(f"[{_role}]\n{_content}")
-            _sep = "=" * 60
-            _nl = "\n"
-            _nl2 = "\n\n"
-            logger.info(
-                f"{_nl}{_sep}{_nl}"
-                f"📤 发送给模型 ({self.model}) 的完整内容:{_nl}"
-                f"{_sep}{_nl}"
-                f"{_nl2.join(_log_messages)}{_nl}"
-                f"{_sep}"
-            )
-
             available_tools = tools if self.support_tools else NOT_GIVEN
+            self._log_completion_input(request_id, messages_with_system, available_tools)
 
             stream: AsyncStream[
                 ChatCompletionChunk
@@ -193,13 +230,14 @@ class AsyncLLM(StatelessLLMInterface):
                     elif in_tool_call and not has_tool_calls:
                         in_tool_call = False
                         # Convert accumulated tool calls to the required format and output
-                        logger.info(f"Complete tool calls: {accumulated_tool_calls}")
+                        logger.debug(f"Complete tool calls: {accumulated_tool_calls}")
 
                         # Use the from_dict method to create a ToolCallObject instance from a dictionary
                         complete_tool_calls = [
                             ToolCallObject.from_dict(tool_data)
                             for tool_data in accumulated_tool_calls.values()
                         ]
+                        output_tool_calls.extend(accumulated_tool_calls.values())
 
                         yield complete_tool_calls
                         accumulated_tool_calls = {}  # Reset for potential future tool calls
@@ -210,19 +248,27 @@ class AsyncLLM(StatelessLLMInterface):
                     continue
                 elif chunk.choices[0].delta.content is None:
                     chunk.choices[0].delta.content = ""
-                yield chunk.choices[0].delta.content
+                content = chunk.choices[0].delta.content
+                output_text_parts.append(content)
+                yield content
 
             # If stream ends while still in a tool call, make sure to yield the tool call
             if in_tool_call and accumulated_tool_calls:
-                logger.info(f"Final tool call at stream end: {accumulated_tool_calls}")
+                logger.debug(f"Final tool call at stream end: {accumulated_tool_calls}")
 
                 # Create a ToolCallObject instance from a dictionary using the from_dict method.
                 complete_tool_calls = [
                     ToolCallObject.from_dict(tool_data)
                     for tool_data in accumulated_tool_calls.values()
                 ]
+                output_tool_calls.extend(accumulated_tool_calls.values())
 
                 yield complete_tool_calls
+
+            self._log_completion_output(
+                request_id, output_text_parts, output_tool_calls
+            )
+            output_logged = True
 
         except APIConnectionError as e:
             logger.error(
@@ -252,6 +298,10 @@ class AsyncLLM(StatelessLLMInterface):
             yield "Error calling the chat endpoint: Error occurred while generating response. See the logs for details."
 
         finally:
+            if not output_logged:
+                self._log_completion_output(
+                    request_id, output_text_parts, output_tool_calls
+                )
             # make sure the stream is properly closed
             # so when interrupted, no more tokens will being generated.
             if stream:

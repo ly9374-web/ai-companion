@@ -76,6 +76,16 @@ class AgentFactory:
                 **rolling_summary_llm_config,
             )
 
+            grok_llm = None
+            grok_llm_config = dict(llm_configs.get("grok_llm") or {})
+            if grok_llm_config:
+                grok_llm_config.pop("interrupt_method", None)
+                grok_llm = StatelessLLMFactory.create_llm(
+                    llm_provider="grok_llm",
+                    system_prompt=system_prompt,
+                    **grok_llm_config,
+                )
+
             tool_prompts = kwargs.get("system_config", {}).get("tool_prompts", {})
 
             # Extract MCP components/data needed by BasicMemoryAgent from kwargs
@@ -86,6 +96,7 @@ class AgentFactory:
             # Create the agent with the LLM and live2d_model
             return BasicMemoryAgent(
                 llm=llm,
+                grok_llm=grok_llm,
                 summary_llm=summary_llm,
                 rolling_summary_llm=rolling_summary_llm,
                 system=system_prompt,

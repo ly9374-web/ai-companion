@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useWebSocket } from "@/context/websocket-context";
 import { useMediaCapture } from "@/hooks/utils/use-media-capture";
 import { formatBrowserTime } from "@/utils/browser-time";
-import { hasStoredDeepSeekApiKey } from "@/constants/api-keys";
+import { getMissingChatApiKeyProvider } from "@/constants/api-keys";
 import { toaster } from "@/components/ui/toaster";
 import { useTranslation } from "react-i18next";
 import { optionalFeature } from "@optional-feature";
@@ -14,9 +14,14 @@ export function useSendAudio() {
 
   const sendAudioPartition = useCallback(
     async (audio: Float32Array) => {
-      if (!hasStoredDeepSeekApiKey()) {
+      const missingApiKeyProvider = getMissingChatApiKeyProvider();
+      if (missingApiKeyProvider) {
         toaster.create({
-          title: t('error.deepseekApiKeyRequired'),
+          title: t(
+            missingApiKeyProvider === 'grok'
+              ? 'error.grokApiKeyRequired'
+              : 'error.deepseekApiKeyRequired',
+          ),
           type: 'warning',
           duration: 3000,
         });

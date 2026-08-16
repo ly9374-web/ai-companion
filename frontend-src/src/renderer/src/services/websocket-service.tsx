@@ -9,7 +9,11 @@ import { toaster } from '@/components/ui/toaster';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
-import { getStoredApiKeys } from '@/constants/api-keys';
+import {
+  getStoredApiKeys,
+  isGrokEnabledForPageSession,
+} from '@/constants/api-keys';
+import { getGeneralRuntimeSettings } from '@/constants/general-runtime-settings';
 
 export interface DisplayText {
   text: string;
@@ -29,6 +33,7 @@ export interface AudioPayload {
   slice_length?: number;
   display_text?: DisplayText;
   actions?: Actions;
+  emotion?: string;
 }
 
 export interface Message {
@@ -79,12 +84,12 @@ export interface MessageEvent {
   display_text?: DisplayText;
   live2d_model?: string;
   voice?: string;
-  language_hint?: string;
   instruction?: string;
   emotion?: string;
   max_history_turns?: number;
   long_term_memory?: string;
   short_term_relationship?: string;
+  provider?: 'deepseek' | 'grok';
   browser_view?: {
     debuggerFullscreenUrl: string;
     debuggerUrl: string;
@@ -123,6 +128,10 @@ class WebSocketService {
 
   private currentState: 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' = 'CLOSED';
 
+  private accountName: string | null = null;
+
+  private connectionGeneration = 0;
+
   static getInstance() {
     if (!WebSocketService.instance) {
       WebSocketService.instance = new WebSocketService();
@@ -133,18 +142,21 @@ class WebSocketService {
   private initializeConnection() {
     const ragSettings = getStoredRagSettings();
     const apiKeys = getStoredApiKeys();
+    const generalSettings = getGeneralRuntimeSettings();
     this.sendMessage({
       type: 'set-api-keys',
       deepseek_api_key: apiKeys.deepseekApiKey,
+      grok_api_key: apiKeys.grokApiKey,
+      grok_enabled: isGrokEnabledForPageSession(),
       qwen_api_key: apiKeys.qwenApiKey,
     });
     this.sendMessage({
       type: 'set-generate-audio',
-      enabled: false,
+      enabled: generalSettings.generateAudio,
     });
     this.sendMessage({
       type: 'set-debug-mode',
-      enabled: false,
+      enabled: generalSettings.debugMode,
     });
     this.sendMessage({
       type: 'set-qwen-tts-options',
@@ -176,23 +188,30 @@ class WebSocketService {
   }
 
   connect(url: string) {
-    if (this.ws?.readyState === WebSocket.CONNECTING ||
-        this.ws?.readyState === WebSocket.OPEN) {
+    if (!this.accountName) {
       this.disconnect();
+      return;
     }
+    this.disconnect();
 
     try {
-      this.ws = new WebSocket(url);
+      const authenticatedUrl = new URL(url);
+      authenticatedUrl.searchParams.set('account', this.accountName);
+      const socket = new WebSocket(authenticatedUrl.toString());
+      const generation = this.connectionGeneration;
+      this.ws = socket;
       this.currentState = 'CONNECTING';
       this.stateSubject.next('CONNECTING');
 
-      this.ws.onopen = () => {
+      socket.onopen = () => {
+        if (this.ws !== socket || generation !== this.connectionGeneration) return;
         this.currentState = 'OPEN';
         this.stateSubject.next('OPEN');
         this.initializeConnection();
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket || generation !== this.connectionGeneration) return;
         try {
           const message = JSON.parse(event.data);
           this.messageSubject.next(message);
@@ -206,12 +225,15 @@ class WebSocketService {
         }
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = () => {
+        if (this.ws !== socket || generation !== this.connectionGeneration) return;
+        this.ws = null;
         this.currentState = 'CLOSED';
         this.stateSubject.next('CLOSED');
       };
 
-      this.ws.onerror = () => {
+      socket.onerror = () => {
+        if (this.ws !== socket || generation !== this.connectionGeneration) return;
         this.currentState = 'CLOSED';
         this.stateSubject.next('CLOSED');
       };
@@ -244,8 +266,28 @@ class WebSocketService {
   }
 
   disconnect() {
-    this.ws?.close();
+    this.connectionGeneration += 1;
+    const socket = this.ws;
     this.ws = null;
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      if (socket.readyState === WebSocket.CONNECTING ||
+          socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+    }
+    this.currentState = 'CLOSED';
+    this.stateSubject.next('CLOSED');
+  }
+
+  setAccount(accountName: string | null) {
+    if (this.accountName !== accountName) {
+      this.disconnect();
+    }
+    this.accountName = accountName;
   }
 
   getCurrentState() {

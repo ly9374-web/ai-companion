@@ -9,6 +9,7 @@ from .live import LiveConfig
 from .stateless_llm import (
     OpenAICompatibleConfig,
     DeepseekConfig,
+    GrokConfig,
 )
 from .asr import (
     ASRConfig,
@@ -45,6 +46,7 @@ __all__ = [
     "LiveConfig",
     "OpenAICompatibleConfig",
     "DeepseekConfig",
+    "GrokConfig",
     "AgentConfig",
     "AgentSettings",
     "StatelessLLMConfigs",

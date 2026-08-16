@@ -6,11 +6,22 @@
     "close": "关闭",
     "accept": "接受"
   },
+  "account": {
+    "login": "登录",
+    "register": "注册",
+    "confirm": "确认",
+    "cancel": "取消",
+    "logout": "退出登录",
+    "loginPlaceholder": "请输入账号",
+    "registerPlaceholder": "你想要叫什么？",
+    "operationFailed": "账号操作失败",
+    "restoreDefaultConnection": "恢复默认连接"
+  },
   "settings": {
     "tabs": {
       "general": "常规",
       "live2d": "Live2D",
-      "asr": "识别",
+      "asr": "语音",
       "key": "Key",
       "agent": "代理",
       "rag": "RAG"
@@ -18,7 +29,6 @@
     "general": {
       "language": "语言",
       "ttsVoice": "音色",
-      "ttsLanguageHint": "语言提示",
       "ttsInstruction": "语音指令",
       "ttsInstructionNone": "空（默认）",
       "generateAudio": "生成语音",
@@ -28,7 +38,8 @@
       "maxHistoryTurns": "上下文历史轮数",
       "maxHistoryTurnsHelp": "每次请求模型时带入的已完成用户-AI对话轮数，当前消息会另外加入。范围为1-100，默认为8。",
       "debugMode": "调试",
-      "debugModeHelp": "开启后，聊天仍会正常保存，但不会调用滚动摘要、长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这些总结。"
+      "debugModeHelp": "开启后，聊天仍会正常保存，但不会调用滚动摘要、长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这些总结。",
+      "rollingSummary": "滚动摘要"
     },
     "tts": {
       "backgroundImage": "背景图片",
@@ -48,6 +59,10 @@
     "key": {
       "deepseek": "DeepSeek Key",
       "deepseekPlaceholder": "输入 DeepSeek Key",
+      "grok": "Grok Key",
+      "grokPlaceholder": "输入 xAI Grok Key",
+      "grokEnabled": "使用 Grok 聊天",
+      "grokEnabledHelp": "开启后仅普通模型聊天切换为 Grok；长期记忆、长期关系、短期关系和滚动摘要仍使用 DeepSeek。刷新或重新进入页面后自动关闭。",
       "qwen": "Qwen Key",
       "qwenPlaceholder": "输入 Qwen Key"
     },
@@ -103,13 +118,20 @@
     "newChatHistory": "新聊天历史已创建",
     "historyDeleteSuccess": "历史记录删除成功",
     "historyDeleteFail": "删除历史记录失败",
+    "settingsSaved": "设置已保存",
     "manualSummaryRunning": "正在总结长期记忆和短期关系…",
     "manualSummaryComplete": "总结完成，下一次自然总结已重新计数",
     "manualSummaryEmpty": "暂无可总结内容",
     "manualSummaryPartialFailure": "部分总结失败，成功项已重新计数",
     "manualSummaryFailed": "总结失败，请稍后重试",
     "manualSummaryDisabled": "调试模式下不会进行记忆总结",
-    "manualSummaryDuplicate": "正在总结，无需重复总结"
+    "manualSummaryDuplicate": "正在总结，无需重复总结",
+    "rollingSummaryRunning": "正在生成滚动摘要…",
+    "rollingSummaryComplete": "滚动摘要已更新",
+    "rollingSummaryEmpty": "暂无上下文外的聊天可总结",
+    "rollingSummaryFailed": "滚动摘要失败，请稍后重试",
+    "rollingSummaryDuplicate": "正在生成滚动摘要，无需重复触发",
+    "rollingSummaryDebugOnly": "请先开启调试模式"
   },
   "error": {
     "failedStartScreenCapture": "启动屏幕捕获失败",
@@ -122,6 +144,7 @@
     "failedParseWebSocket": "解析WebSocket消息失败",
     "websocketNotOpen": "WebSocket未连接",
     "deepseekApiKeyRequired": "请先在设置 → Key 中填写 DeepSeek Key",
+    "grokApiKeyRequired": "Grok 已开启，请先在设置 → Key 中填写 Grok Key",
     "vadMisfire": "检测到语音但过于简短，请尝试提高音量或说得更久一些，或调整识别设置（降低语音识别阈值、降低负面语音阈值、减少验证帧数）"
   },
   "aiState": {

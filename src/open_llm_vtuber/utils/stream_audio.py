@@ -99,6 +99,7 @@ def prepare_audio_payload(
     chunk_length_ms: int = 20,
     display_text: DisplayText = None,
     actions: Actions = None,
+    emotion: str | None = None,
 ) -> dict[str, any]:
     """Prepares the audio payload for sending to the frontend.
 
@@ -126,6 +127,7 @@ def prepare_audio_payload(
             "slice_length": chunk_length_ms,
             "display_text": display_text,
             "actions": actions.to_dict() if actions else None,
+            "emotion": emotion,
         }
 
     try:
@@ -150,6 +152,7 @@ def prepare_audio_payload(
         "slice_length": chunk_length_ms,
         "display_text": display_text,
         "actions": actions.to_dict() if actions else None,
+        "emotion": emotion,
     }
 
     return payload

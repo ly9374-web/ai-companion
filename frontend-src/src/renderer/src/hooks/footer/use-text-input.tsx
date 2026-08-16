@@ -7,7 +7,7 @@ import { useVAD } from '@/context/vad-context';
 import { useMediaCapture } from '@/hooks/utils/use-media-capture';
 import { formatBrowserTime } from '@/utils/browser-time';
 import { optionalFeature } from '@optional-feature';
-import { hasStoredDeepSeekApiKey } from '@/constants/api-keys';
+import { getMissingChatApiKeyProvider } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
 
@@ -28,9 +28,14 @@ export function useTextInput() {
 
   const handleSend = async () => {
     if (!inputText.trim() || !wsContext) return;
-    if (!hasStoredDeepSeekApiKey()) {
+    const missingApiKeyProvider = getMissingChatApiKeyProvider();
+    if (missingApiKeyProvider) {
       toaster.create({
-        title: t('error.deepseekApiKeyRequired'),
+        title: t(
+          missingApiKeyProvider === 'grok'
+            ? 'error.grokApiKeyRequired'
+            : 'error.deepseekApiKeyRequired',
+        ),
         type: 'warning',
         duration: 3000,
       });

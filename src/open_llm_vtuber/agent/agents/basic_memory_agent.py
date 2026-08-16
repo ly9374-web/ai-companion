@@ -8,7 +8,7 @@ from typing import (
     Union,
     Optional,
 )
-import json
+from pathlib import Path
 from loguru import logger
 from .agent_interface import AgentInterface
 from ..output_types import SentenceOutput, DisplayText
@@ -34,6 +34,11 @@ class BasicMemoryAgent(AgentInterface):
     """Agent with basic chat memory and tool calling support."""
 
     _system: str = prompt_builder.load_system_prompt("default_system")
+    _WEB_SEARCH_TRIGGER_PHRASES = (
+        "search it from the website",
+        "帮我从网上搜索",
+    )
+    _WEB_SEARCH_TOOL_NAMES = frozenset(("search", "fetch_content"))
     _CONTEXT_INJECTION_KEYS = (
         "long_term_relationship_context",
         "short_term_relationship_context",
@@ -44,6 +49,7 @@ class BasicMemoryAgent(AgentInterface):
         llm: StatelessLLMInterface,
         system: str,
         live2d_model,
+        grok_llm: Optional[StatelessLLMInterface] = None,
         summary_llm: Optional[StatelessLLMInterface] = None,
         rolling_summary_llm: Optional[StatelessLLMInterface] = None,
         tts_preprocessor_config: TTSPreprocessorConfig = None,
@@ -76,7 +82,6 @@ class BasicMemoryAgent(AgentInterface):
         self._mcp_prompt_string = mcp_prompt_string
         self._json_detector = StreamJSONDetector()
         self._turn_sequence = 0
-        self._request_sequence = 0
 
         self._formatted_tools_openai = []
         if self._tool_manager:
@@ -91,6 +96,9 @@ class BasicMemoryAgent(AgentInterface):
                 "ToolManager not provided, agent will not have pre-formatted tools."
             )
 
+        self._deepseek_llm = llm
+        self._grok_llm = grok_llm
+        self._grok_enabled = False
         self._set_llm(llm)
         self._summary_llm = summary_llm or llm
         self._rolling_summary_llm = rolling_summary_llm or self._summary_llm
@@ -123,6 +131,14 @@ class BasicMemoryAgent(AgentInterface):
         """Set the LLM for chat completion."""
         self._llm = llm
         self.chat = self._chat_function_factory()
+
+    def set_grok_enabled(self, enabled: bool) -> None:
+        """Route interactive chat only; summary clients always remain DeepSeek."""
+        if enabled and self._grok_llm is None:
+            raise ValueError("Grok is not configured")
+        self._grok_enabled = enabled
+        self._set_llm(self._grok_llm if enabled else self._deepseek_llm)
+        logger.info("Interactive chat model switched to {}", "Grok" if enabled else "DeepSeek")
 
     def set_system(self, system: str):
         """Set the system prompt."""
@@ -288,9 +304,14 @@ class BasicMemoryAgent(AgentInterface):
 
         self._memory.append(message_data)
 
-    def set_memory_from_history(self, conf_uid: str, history_uid: str) -> None:
+    def set_memory_from_history(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        history_root: str | Path = "chat_history",
+    ) -> None:
         """Load memory from chat history."""
-        messages = get_history(conf_uid, history_uid)
+        messages = get_history(conf_uid, history_uid, history_root)
 
         self._memory = []
         for msg in messages:
@@ -376,6 +397,25 @@ class BasicMemoryAgent(AgentInterface):
             message_parts.append(prompt_builder.load_runtime_prompt("image_notice"))
 
         return prompt_builder.join_prompt_lines(message_parts)
+
+    @classmethod
+    def _web_search_requested(cls, input_data: BatchInput) -> bool:
+        """Enable web tools only for the two exact, case-sensitive trigger phrases."""
+        return any(
+            phrase in text_data.content
+            for text_data in input_data.texts
+            if text_data.source == TextSource.INPUT
+            for phrase in cls._WEB_SEARCH_TRIGGER_PHRASES
+        )
+
+    def _get_web_search_tools(self) -> List[Dict[str, Any]]:
+        """Return only DuckDuckGo search and webpage-fetch tools."""
+        return [
+            tool
+            for tool in self._formatted_tools_openai
+            if tool.get("function", {}).get("name")
+            in self._WEB_SEARCH_TOOL_NAMES
+        ]
 
     def _to_messages(self, input_data: BatchInput) -> List[Dict[str, Any]]:
         """Prepare messages for LLM API call."""
@@ -499,8 +539,6 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info("Long-term memory system prompt:\n{}", system_prompt)
-        logger.info("Long-term memory user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
@@ -508,10 +546,6 @@ class BasicMemoryAgent(AgentInterface):
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
-        logger.info(
-            "Long-term memory raw model output:\n{}",
-            raw_output or "[empty output]",
-        )
         return raw_output
 
     async def summarize_rolling_context(
@@ -523,8 +557,6 @@ class BasicMemoryAgent(AgentInterface):
         summary_input = prompt_builder.build_rolling_context_summary_input(turns)
         messages = [{"role": "user", "content": summary_input}]
 
-        logger.info("Rolling context system prompt:\n{}", system_prompt)
-        logger.info("Rolling context user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._rolling_summary_llm.chat_completion(
             messages, system_prompt
@@ -534,10 +566,6 @@ class BasicMemoryAgent(AgentInterface):
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
-        logger.info(
-            "Rolling context raw model output:\n{}",
-            raw_output or "[empty output]",
-        )
         return raw_output
 
     async def summarize_long_term_relationship(
@@ -563,8 +591,6 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info("Long-term relationship system prompt:\n{}", system_prompt)
-        logger.info("Long-term relationship user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
@@ -572,10 +598,6 @@ class BasicMemoryAgent(AgentInterface):
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
-        logger.info(
-            "Long-term relationship raw model output:\n{}",
-            raw_output or "[empty output]",
-        )
         return raw_output
 
     async def summarize_short_term_relationship(
@@ -603,8 +625,6 @@ class BasicMemoryAgent(AgentInterface):
             }
         ]
 
-        logger.info("Short-term relationship system prompt:\n{}", system_prompt)
-        logger.info("Short-term relationship user prompt:\n{}", summary_input)
         chunks: List[str] = []
         async for event in self._summary_llm.chat_completion(messages, system_prompt):
             if isinstance(event, str):
@@ -612,61 +632,14 @@ class BasicMemoryAgent(AgentInterface):
             elif isinstance(event, dict) and event.get("type") == "text_delta":
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
-        logger.info(
-            "Short-term relationship raw model output:\n{}",
-            raw_output or "[empty output]",
-        )
         return raw_output
-
-    @staticmethod
-    def _sanitize_request_for_log(value: Any) -> Any:
-        """Remove bulky image payloads while preserving the request structure."""
-        if isinstance(value, dict):
-            return {
-                key: BasicMemoryAgent._sanitize_request_for_log(item)
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [BasicMemoryAgent._sanitize_request_for_log(item) for item in value]
-        if isinstance(value, str) and value.startswith("data:image"):
-            return f"[image data omitted from log: {len(value)} characters]"
-        return value
-
-    def _log_llm_request(
-        self,
-        turn_id: int,
-        messages: List[Dict[str, Any]],
-        system_prompt: str,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> None:
-        """Log each request immediately before it is sent to the LLM backend."""
-        self._request_sequence += 1
-        tool_names = []
-        for tool in tools or []:
-            function = tool.get("function", tool) if isinstance(tool, dict) else {}
-            if isinstance(function, dict) and function.get("name"):
-                tool_names.append(function["name"])
-
-        request_log = {
-            "turn_id": turn_id,
-            "request_id": self._request_sequence,
-            "provider": type(self._llm).__name__,
-            "model": getattr(self._llm, "model", None),
-            "base_url": getattr(self._llm, "base_url", None),
-            "system_prompt": system_prompt,
-            "messages": self._sanitize_request_for_log(messages),
-            "tools": tool_names,
-        }
-        logger.info(
-            "LLM REQUEST\n{}",
-            json.dumps(request_log, ensure_ascii=False, indent=2, default=str),
-        )
 
     async def _openai_tool_interaction_loop(
         self,
         initial_messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         turn_id: int,
+        llm: StatelessLLMInterface,
     ) -> AsyncIterator[Union[str, Dict[str, Any]]]:
         """Handle OpenAI interaction with tool support."""
         messages = initial_messages.copy()
@@ -688,10 +661,7 @@ class BasicMemoryAgent(AgentInterface):
                 current_system_prompt = self._system
                 tools_for_api = tools
 
-            self._log_llm_request(
-                turn_id, messages, current_system_prompt, tools_for_api
-            )
-            stream = self._llm.chat_completion(
+            stream = llm.chat_completion(
                 messages, current_system_prompt, tools=tools_for_api
             )
             pending_tool_calls.clear()
@@ -751,11 +721,9 @@ class BasicMemoryAgent(AgentInterface):
                         break
                     elif event == "__API_NOT_SUPPORT_TOOLS__":
                         logger.warning(
-                            f"LLM {getattr(self._llm, 'model', '')} has no native tool support. Switching to prompt mode."
+                            f"LLM {getattr(llm, 'model', '')} has no native tool support. Switching to prompt mode."
                         )
                         self.prompt_mode_flag = True
-                        if self._tool_manager:
-                            self._tool_manager.disable()
                         if self._json_detector:
                             self._json_detector.reset()
                         goto_next_while_iteration = True
@@ -875,7 +843,8 @@ class BasicMemoryAgent(AgentInterface):
         ) -> AsyncIterator[Union[str, Dict[str, Any]]]:
             """Process chat with memory and tools."""
             self.reset_interrupt()
-            self.prompt_mode_flag = False
+            active_llm = self._llm
+            self.prompt_mode_flag = not getattr(active_llm, "support_tools", True)
             self._turn_sequence += 1
             turn_id = self._turn_sequence
 
@@ -884,15 +853,17 @@ class BasicMemoryAgent(AgentInterface):
             tool_mode = None
             llm_supports_native_tools = False
 
-            if self._use_mcpp and self._tool_manager:
+            web_search_requested = self._web_search_requested(input_data)
+
+            if self._use_mcpp and self._tool_manager and web_search_requested:
                 tools = None
-                if isinstance(self._llm, OpenAICompatibleAsyncLLM):
+                if isinstance(active_llm, OpenAICompatibleAsyncLLM):
                     tool_mode = "OpenAI"
-                    tools = self._formatted_tools_openai
+                    tools = self._get_web_search_tools()
                     llm_supports_native_tools = True
                 else:
                     logger.warning(
-                        f"LLM type {type(self._llm)} not explicitly handled for tool mode determination."
+                        f"LLM type {type(active_llm)} not explicitly handled for tool mode determination."
                     )
 
                 if llm_supports_native_tools and not tools:
@@ -900,19 +871,17 @@ class BasicMemoryAgent(AgentInterface):
                         f"No tools available/formatted for '{tool_mode}' mode, despite MCP being enabled."
                     )
 
-            if self._use_mcpp and tool_mode == "OpenAI":
+            if self._use_mcpp and tool_mode == "OpenAI" and tools:
                 logger.debug(
                     f"Starting OpenAI tool interaction loop with {len(tools)} tools."
                 )
                 async for output in self._openai_tool_interaction_loop(
-                    messages, tools if tools else [], turn_id
+                    messages, tools if tools else [], turn_id, active_llm
                 ):
                     yield output
                 return
             else:
-                logger.info("Starting simple chat completion.")
-                self._log_llm_request(turn_id, messages, self._system)
-                token_stream = self._llm.chat_completion(messages, self._system)
+                token_stream = active_llm.chat_completion(messages, self._system)
                 complete_response = ""
                 async for event in token_stream:
                     text_chunk = ""

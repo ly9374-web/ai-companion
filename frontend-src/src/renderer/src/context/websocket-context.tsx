@@ -1,10 +1,15 @@
 /* eslint-disable react/jsx-no-constructed-context-values */
 import React, { useContext, useCallback } from 'react';
 import { wsService } from '@/services/websocket-service';
-import { useLocalStorage } from '@/hooks/utils/use-local-storage';
+import {
+  DEFAULT_BASE_URL,
+  DEFAULT_WS_URL,
+  getCurrentBaseUrl,
+  getCurrentWsUrl,
+  setCurrentBaseUrl,
+  setCurrentWsUrl,
+} from '@/constants/connection-settings';
 
-const DEFAULT_WS_URL = 'ws://127.0.0.1:12393/client-ws';
-const DEFAULT_BASE_URL = 'http://127.0.0.1:12393';
 
 export interface HistoryInfo {
   uid: string;
@@ -48,12 +53,17 @@ export const defaultWsUrl = DEFAULT_WS_URL;
 export const defaultBaseUrl = DEFAULT_BASE_URL;
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
-  const [wsUrl, setWsUrl] = useLocalStorage('wsUrl', DEFAULT_WS_URL);
-  const [baseUrl, setBaseUrl] = useLocalStorage('baseUrl', DEFAULT_BASE_URL);
+  const [wsUrl, setWsUrlState] = React.useState(getCurrentWsUrl);
+  const [baseUrl, setBaseUrlState] = React.useState(getCurrentBaseUrl);
   const handleSetWsUrl = useCallback((url: string) => {
-    setWsUrl(url);
+    setCurrentWsUrl(url);
+    setWsUrlState(url);
     wsService.connect(url);
-  }, [setWsUrl]);
+  }, []);
+  const handleSetBaseUrl = useCallback((url: string) => {
+    setCurrentBaseUrl(url);
+    setBaseUrlState(url);
+  }, []);
 
   const value = {
     sendMessage: wsService.sendMessage.bind(wsService),
@@ -62,7 +72,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     wsUrl,
     setWsUrl: handleSetWsUrl,
     baseUrl,
-    setBaseUrl,
+    setBaseUrl: handleSetBaseUrl,
   };
 
   return (

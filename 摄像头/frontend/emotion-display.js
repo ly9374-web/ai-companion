@@ -1,5 +1,5 @@
 const EMOTION_LABELS_ZH = new Map([
-  ['neutral', '中性'],
+  ['neutral', '平静'],
   ['happy', '开心'],
   ['sad', '悲伤'],
   ['angry', '愤怒'],
@@ -12,6 +12,13 @@ function emotionLabel(emotions) {
   return emotions
     .map((emotion) => EMOTION_LABELS_ZH.get(emotion) || emotion)
     .join('或');
+}
+
+function emotionSequenceLabel(sequence) {
+  if (!Array.isArray(sequence) || !sequence.length) return '';
+  const labels = sequence.map((emotions) => emotionLabel(emotions)).filter(Boolean);
+  if (!labels.length) return '';
+  return labels.length === 1 ? labels[0] : `先${labels.join('转为')}`;
 }
 
 function createValueWindow(title) {
@@ -167,6 +174,10 @@ export class EmotionDisplay {
 
   setFinal(emotions) {
     this.finalValue.textContent = emotionLabel(emotions);
+  }
+
+  setFinalSequence(sequence) {
+    this.finalValue.textContent = emotionSequenceLabel(sequence);
   }
 
   setAuDeltas(items) {

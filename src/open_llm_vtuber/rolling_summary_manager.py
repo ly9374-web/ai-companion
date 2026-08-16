@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from loguru import logger
@@ -17,7 +19,8 @@ RollingSummaryCallback = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 
 class RollingSummaryManager:
-    def __init__(self) -> None:
+    def __init__(self, history_root: str | Path = "chat_history") -> None:
+        self.history_root = Path(history_root)
         self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def _get_history_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
@@ -27,6 +30,30 @@ class RollingSummaryManager:
             lock = asyncio.Lock()
             self._history_locks[key] = lock
         return lock
+
+    def _read_metadata(self, conf_uid: str, history_uid: str) -> dict:
+        if "history_root" in inspect.signature(get_metadata).parameters:
+            return get_metadata(
+                conf_uid,
+                history_uid,
+                history_root=self.history_root,
+            )
+        return get_metadata(conf_uid, history_uid)
+
+    def _write_metadata(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        metadata: dict,
+    ) -> bool:
+        if "history_root" in inspect.signature(update_metadate).parameters:
+            return update_metadate(
+                conf_uid,
+                history_uid,
+                metadata,
+                history_root=self.history_root,
+            )
+        return update_metadate(conf_uid, history_uid, metadata)
 
     @staticmethod
     def parse_summary(raw_output: str) -> str:
@@ -77,14 +104,14 @@ class RollingSummaryManager:
         start_index = max(0, summary_end - 30)
         return turns[start_index:summary_end], start_index + 1, summary_end
 
-    @staticmethod
     def read_injection(
+        self,
         conf_uid: str,
         history_uid: str,
         completed_turns: int,
         context_turns: int,
     ) -> str:
-        state = get_metadata(conf_uid, history_uid).get(
+        state = self._read_metadata(conf_uid, history_uid).get(
             ROLLING_SUMMARY_METADATA_KEY, {}
         )
         if not isinstance(state, dict):
@@ -109,6 +136,7 @@ class RollingSummaryManager:
         end_turn: int,
         generated_at_turn: int,
         summarize: RollingSummaryCallback,
+        force: bool = False,
     ) -> bool:
         if not turns:
             return False
@@ -121,6 +149,7 @@ class RollingSummaryManager:
                 end_turn,
                 generated_at_turn,
                 summarize,
+                force,
             )
 
     async def _generate_and_store_unlocked(
@@ -132,8 +161,9 @@ class RollingSummaryManager:
         end_turn: int,
         generated_at_turn: int,
         summarize: RollingSummaryCallback,
+        force: bool,
     ) -> bool:
-        existing_state = get_metadata(conf_uid, history_uid).get(
+        existing_state = self._read_metadata(conf_uid, history_uid).get(
             ROLLING_SUMMARY_METADATA_KEY, {}
         )
         existing_turn = (
@@ -142,7 +172,8 @@ class RollingSummaryManager:
             else 0
         )
         if (
-            not isinstance(existing_turn, bool)
+            not force
+            and not isinstance(existing_turn, bool)
             and isinstance(existing_turn, int)
             and existing_turn >= generated_at_turn
         ):
@@ -159,7 +190,7 @@ class RollingSummaryManager:
         if summary is None:
             logger.error("Rolling summary failed after 3 attempts: {}", last_error)
             return False
-        existing_state = get_metadata(conf_uid, history_uid).get(
+        existing_state = self._read_metadata(conf_uid, history_uid).get(
             ROLLING_SUMMARY_METADATA_KEY, {}
         )
         existing_turn = (
@@ -168,7 +199,8 @@ class RollingSummaryManager:
             else 0
         )
         if (
-            not isinstance(existing_turn, bool)
+            not force
+            and not isinstance(existing_turn, bool)
             and isinstance(existing_turn, int)
             and existing_turn > generated_at_turn
         ):
@@ -177,7 +209,7 @@ class RollingSummaryManager:
                 generated_at_turn,
             )
             return False
-        saved = update_metadate(
+        saved = self._write_metadata(
             conf_uid,
             history_uid,
             {

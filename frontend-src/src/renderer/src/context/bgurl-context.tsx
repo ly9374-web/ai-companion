@@ -1,7 +1,11 @@
 import {
   createContext, useMemo, useContext, useState, useCallback,
 } from 'react';
-import { useLocalStorage } from '@/hooks/utils/use-local-storage';
+import {
+  getStoredAccountBackground,
+  setStoredAccountBackground,
+} from '@/constants/account-settings';
+import { useAccount } from './account-context';
 import { useWebSocket } from './websocket-context';
 
 /**
@@ -40,13 +44,17 @@ const BgUrlContext = createContext<BgUrlContextState | null>(null);
  */
 export function BgUrlProvider({ children }: { children: React.ReactNode }) {
   const { baseUrl } = useWebSocket();
+  const { account } = useAccount();
   const DEFAULT_BACKGROUND = `${baseUrl}/bg/ceiling-window-room-night.jpeg`;
 
-  // Local storage for persistent background URL
-  const [backgroundUrl, setBackgroundUrl] = useLocalStorage<string>(
-    'backgroundUrl',
-    DEFAULT_BACKGROUND,
+  const [backgroundUrl, setBackgroundUrlState] = useState<string>(
+    () => getStoredAccountBackground(account || '', DEFAULT_BACKGROUND),
   );
+
+  const setBackgroundUrl = useCallback((url: string) => {
+    setBackgroundUrlState(url);
+    if (account) setStoredAccountBackground(account, url);
+  }, [account]);
 
   // State for background files list
   const [backgroundFiles, setBackgroundFiles] = useState<BackgroundFile[]>([]);

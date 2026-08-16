@@ -3,15 +3,40 @@ import { useVAD } from "@/context/vad-context";
 
 /**
  * Hold Space to define one speech segment while the microphone is already on.
- * Space is reserved for speech and never activates the currently focused control.
+ * Space remains regular text input while the user is typing.
  */
 export function useSpaceToTalk() {
   const { startManualSpeech, finishManualSpeech } = useVAD();
   const spaceSessionActiveRef = useRef(false);
 
   useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+
+      if (
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"], [role="textbox"]')
+      ) {
+        return true;
+      }
+
+      if (target instanceof HTMLTextAreaElement) return true;
+      if (!(target instanceof HTMLInputElement)) return false;
+
+      return [
+        "email",
+        "number",
+        "password",
+        "search",
+        "tel",
+        "text",
+        "url",
+      ].includes(target.type);
+    };
+
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.code !== "Space" || event.isComposing) return;
+      if (isTypingTarget(event.target)) return;
 
       // Capture Space before focused buttons can turn it into a synthetic click.
       event.preventDefault();
@@ -41,6 +66,7 @@ export function useSpaceToTalk() {
 
     const handleKeyUp = (event: globalThis.KeyboardEvent) => {
       if (event.code !== "Space" || event.isComposing) return;
+      if (!spaceSessionActiveRef.current && isTypingTarget(event.target)) return;
 
       event.preventDefault();
       event.stopPropagation();

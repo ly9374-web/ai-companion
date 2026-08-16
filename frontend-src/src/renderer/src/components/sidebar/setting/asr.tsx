@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { settingStyles } from './setting-styles';
 import { useASRSettings } from '@/hooks/sidebar/setting/use-asr-settings';
 import { SwitchField, NumberField } from './common';
+import Agent from './agent';
 
 interface ASRProps {
   onSave?: (callback: () => void) => () => void
@@ -58,6 +59,8 @@ function ASR({ onSave, onCancel }: ASRProps): JSX.Element {
         checked={autoStartMicOn}
         onChange={setAutoStartMicOn}
       />
+
+      <Agent onSave={onSave} onCancel={onCancel} embedded />
 
       <NumberField
         label={t('settings.asr.positiveSpeechThreshold')}

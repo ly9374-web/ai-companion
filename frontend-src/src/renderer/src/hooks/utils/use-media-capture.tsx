@@ -5,10 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { useScreenCaptureContext } from '@/context/screen-capture-context';
 import { toaster } from "@/components/ui/toaster";
 import {
-  IMAGE_COMPRESSION_QUALITY_KEY,
-  DEFAULT_IMAGE_COMPRESSION_QUALITY,
-  IMAGE_MAX_WIDTH_KEY,
-  DEFAULT_IMAGE_MAX_WIDTH,
+  getStoredImageCompressionQuality,
+  getStoredImageMaxWidth,
 } from '@/constants/image-settings';
 
 // Add type definition for ImageCapture
@@ -29,25 +27,11 @@ export function useMediaCapture() {
   const { stream: screenStream } = useScreenCaptureContext();
 
   const getCompressionQuality = useCallback(() => {
-    const storedQuality = localStorage.getItem(IMAGE_COMPRESSION_QUALITY_KEY);
-    if (storedQuality) {
-      const quality = parseFloat(storedQuality);
-      if (!Number.isNaN(quality) && quality >= 0.1 && quality <= 1.0) {
-        return quality;
-      }
-    }
-    return DEFAULT_IMAGE_COMPRESSION_QUALITY;
+    return getStoredImageCompressionQuality();
   }, []);
 
   const getImageMaxWidth = useCallback(() => {
-    const storedMaxWidth = localStorage.getItem(IMAGE_MAX_WIDTH_KEY);
-    if (storedMaxWidth) {
-      const maxWidth = parseInt(storedMaxWidth, 10);
-      if (!Number.isNaN(maxWidth) && maxWidth >= 0) {
-        return maxWidth;
-      }
-    }
-    return DEFAULT_IMAGE_MAX_WIDTH;
+    return getStoredImageMaxWidth();
   }, []);
 
   const captureFrame = useCallback(async (stream: MediaStream | null, source: 'screen') => {

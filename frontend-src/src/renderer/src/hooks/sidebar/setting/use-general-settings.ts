@@ -8,22 +8,19 @@ import { useConfig } from '@/context/character-config-context';
 import i18n from 'i18next';
 import {
   getStoredTtsInstructionPreset,
-  getStoredTtsLanguageHint,
   getStoredTtsVoice,
   getTtsInstruction,
-  TTS_INSTRUCTION_PRESET_STORAGE_KEY,
-  TTS_LANGUAGE_HINT_STORAGE_KEY,
-  TTS_VOICE_STORAGE_KEY,
+  setCurrentQwenTtsSettings,
 } from '@/constants/qwen-tts-voices';
 import {
   getStoredMaxHistoryTurns,
-  MAX_HISTORY_TURNS_STORAGE_KEY,
+  setCurrentMaxHistoryTurns,
 } from '@/constants/max-history-turns';
+import { setStoredCharacterPreset } from '@/constants/character-settings';
 
 interface GeneralSettings {
   language: string[]
   ttsVoice: string[]
-  ttsLanguageHint: string[]
   ttsInstructionPreset: string[]
   selectedCharacterPreset: string[]
   showSubtitle: boolean
@@ -36,7 +33,6 @@ interface UseGeneralSettingsProps {
   setConfName: (name: string) => void
   onQwenTtsOptionsChange: (options: {
     voice: string
-    language_hint: string
     instruction: string
     notify_ai: boolean
   }) => void
@@ -67,7 +63,6 @@ export const useGeneralSettings = ({
   const initialSettings: GeneralSettings = {
     language: [i18n.language || 'en'],
     ttsVoice: [getStoredTtsVoice()],
-    ttsLanguageHint: [getStoredTtsLanguageHint()],
     ttsInstructionPreset: [getStoredTtsInstructionPreset()],
     selectedCharacterPreset: getCurrentCharacterFilename(),
     showSubtitle,
@@ -76,9 +71,12 @@ export const useGeneralSettings = ({
 
   const [settings, setSettings] = useState<GeneralSettings>(initialSettings);
   const [originalSettings, setOriginalSettings] = useState<GeneralSettings>(initialSettings);
+  const settingsRef = useRef(settings);
+  const originalSettingsRef = useRef(originalSettings);
+  settingsRef.current = settings;
+  originalSettingsRef.current = originalSettings;
   const lastTtsOptionsRef = useRef({
     voice: initialSettings.ttsVoice[0],
-    language_hint: initialSettings.ttsLanguageHint[0],
     instruction: getTtsInstruction(initialSettings.ttsInstructionPreset[0]),
   });
   const originalConfName = confName;
@@ -90,51 +88,33 @@ export const useGeneralSettings = ({
     if (settings.language && settings.language[0] && settings.language[0] !== i18n.language) {
       i18n.changeLanguage(settings.language[0]);
     }
-    localStorage.setItem(
-      MAX_HISTORY_TURNS_STORAGE_KEY,
-      settings.maxHistoryTurns.toString(),
-    );
     onMaxHistoryTurnsChange(settings.maxHistoryTurns);
   }, [settings, onMaxHistoryTurnsChange, setShowSubtitle]);
 
   useEffect(() => {
     const selectedTtsVoice = settings.ttsVoice[0];
-    const selectedLanguageHint = settings.ttsLanguageHint[0];
     const selectedInstructionPreset = settings.ttsInstructionPreset[0];
-    if (selectedTtsVoice && selectedLanguageHint && selectedInstructionPreset) {
+    if (selectedTtsVoice && selectedInstructionPreset) {
       const nextOptions = {
         voice: selectedTtsVoice,
-        language_hint: selectedLanguageHint,
         instruction: getTtsInstruction(selectedInstructionPreset),
       };
       const previousOptions = lastTtsOptionsRef.current;
       if (
         nextOptions.voice === previousOptions.voice
-        && nextOptions.language_hint === previousOptions.language_hint
         && nextOptions.instruction === previousOptions.instruction
       ) {
         return;
       }
 
-      localStorage.setItem(TTS_VOICE_STORAGE_KEY, JSON.stringify(selectedTtsVoice));
-      localStorage.setItem(
-        TTS_LANGUAGE_HINT_STORAGE_KEY,
-        JSON.stringify(selectedLanguageHint),
-      );
-      localStorage.setItem(
-        TTS_INSTRUCTION_PRESET_STORAGE_KEY,
-        JSON.stringify(selectedInstructionPreset),
-      );
       onQwenTtsOptionsChange({
         ...nextOptions,
-        notify_ai: nextOptions.voice !== previousOptions.voice
-          || nextOptions.language_hint !== previousOptions.language_hint,
+        notify_ai: nextOptions.voice !== previousOptions.voice,
       });
       lastTtsOptionsRef.current = nextOptions;
     }
   }, [
     settings.ttsVoice,
-    settings.ttsLanguageHint,
     settings.ttsInstructionPreset,
     onQwenTtsOptionsChange,
   ]);
@@ -184,14 +164,23 @@ export const useGeneralSettings = ({
   };
 
   const handleSave = (): void => {
-    setOriginalSettings(settings);
+    const latestSettings = settingsRef.current;
+    setOriginalSettings(latestSettings);
+    originalSettingsRef.current = latestSettings;
+    setCurrentQwenTtsSettings(
+      latestSettings.ttsVoice[0],
+      latestSettings.ttsInstructionPreset[0],
+    );
+    setCurrentMaxHistoryTurns(latestSettings.maxHistoryTurns);
+    setStoredCharacterPreset(latestSettings.selectedCharacterPreset[0]);
   };
 
   const handleCancel = (): void => {
-    setSettings(originalSettings);
+    const savedSettings = originalSettingsRef.current;
+    setSettings(savedSettings);
 
     // Restore all settings to original values
-    setShowSubtitle(originalSettings.showSubtitle);
+    setShowSubtitle(savedSettings.showSubtitle);
 
     // Restore original character preset
     if (originalConfName) {

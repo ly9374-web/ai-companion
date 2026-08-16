@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -173,21 +174,30 @@ class LongTermRelationshipManager:
             raise ValueError("long_term_relationship cannot be empty")
         return relationship
 
-    @staticmethod
-    def _get_state(conf_uid: str, history_uid: str) -> dict:
-        metadata = get_metadata(conf_uid, history_uid)
+    def _get_state(self, conf_uid: str, history_uid: str) -> dict:
+        if "history_root" in inspect.signature(get_metadata).parameters:
+            metadata = get_metadata(
+                conf_uid,
+                history_uid,
+                history_root=self.history_root,
+            )
+        else:
+            metadata = get_metadata(conf_uid, history_uid)
         state = metadata.get(LONG_TERM_RELATIONSHIP_METADATA_KEY, {})
         if not isinstance(state, dict):
             return {}
         return state.copy()
 
-    @staticmethod
-    def _save_state(conf_uid: str, history_uid: str, state: dict) -> bool:
-        return update_metadate(
-            conf_uid,
-            history_uid,
-            {LONG_TERM_RELATIONSHIP_METADATA_KEY: state},
-        )
+    def _save_state(self, conf_uid: str, history_uid: str, state: dict) -> bool:
+        metadata = {LONG_TERM_RELATIONSHIP_METADATA_KEY: state}
+        if "history_root" in inspect.signature(update_metadate).parameters:
+            return update_metadate(
+                conf_uid,
+                history_uid,
+                metadata,
+                history_root=self.history_root,
+            )
+        return update_metadate(conf_uid, history_uid, metadata)
 
     @staticmethod
     def _read_text(path: Path) -> str:

@@ -8,9 +8,10 @@ import { SwitchField, NumberField } from './common';
 interface AgentProps {
   onSave?: (callback: () => void) => () => void
   onCancel?: (callback: () => void) => () => void
+  embedded?: boolean
 }
 
-function Agent({ onSave, onCancel }: AgentProps): JSX.Element {
+function Agent({ onSave, onCancel, embedded = false }: AgentProps): JSX.Element {
   const { t } = useTranslation();
   const {
     settings,
@@ -19,8 +20,8 @@ function Agent({ onSave, onCancel }: AgentProps): JSX.Element {
     handleAllowButtonTriggerChange,
   } = useAgentSettings({ onSave, onCancel });
 
-  return (
-    <Stack {...settingStyles.common.container}>
+  const fields = (
+    <>
       <SwitchField
         label={t('settings.agent.allowProactiveSpeak')}
         checked={settings.allowProactiveSpeak}
@@ -43,6 +44,16 @@ function Agent({ onSave, onCancel }: AgentProps): JSX.Element {
         checked={settings.allowButtonTrigger}
         onChange={handleAllowButtonTriggerChange}
       />
+    </>
+  );
+
+  if (embedded) {
+    return fields;
+  }
+
+  return (
+    <Stack {...settingStyles.common.container}>
+      {fields}
     </Stack>
   );
 }

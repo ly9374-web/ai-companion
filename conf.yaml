@@ -9,12 +9,7 @@ system_config:
   port: 12393
   config_alts_dir: 'characters'
   tool_prompts:
-    live2d_expression_prompt: 'live2d_expression_prompt'
-    speakable_prompt: 'speakable_prompt'
-    think_tag_prompt: 'think_tag_prompt'
     mcp_prompt: 'mcp_prompt'
-    tool_guidance_prompt: 'tool_guidance_prompt'
-    concise_style_prompt: 'concise_style_prompt'
     proactive_speak_prompt: 'proactive_speak_prompt'
 
 character_config:
@@ -39,12 +34,17 @@ character_config:
         segment_method: 'pysbd'
         max_history_turns: 8
         use_mcpp: True
-        mcp_enabled_servers: ["time", "ddg-search"]
+        mcp_enabled_servers: ["ddg-search"]
 
     llm_configs:
       deepseek_llm:
         llm_api_key: ''
         model: 'deepseek-v4-flash'
+        temperature: 0.7
+      grok_llm:
+        base_url: 'https://api.x.ai/v1'
+        llm_api_key: ''
+        model: 'grok-latest'
         temperature: 0.7
 
   asr_config:
@@ -66,7 +66,6 @@ character_config:
       api_key: ''
       model: 'qwen-audio-3.0-tts-flash'
       voice: 'qwen-audio-3.0-tts-flash-longyuyaoluan'
-      language_hint: 'en'
       instruction: ''
       sample_rate: 24000
       rate: 1.0

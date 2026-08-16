@@ -1,16 +1,8 @@
-export const TTS_VOICE_STORAGE_KEY = "qwenTtsVoice";
-export const TTS_LANGUAGE_HINT_STORAGE_KEY = "qwenTtsLanguageHint";
-export const TTS_INSTRUCTION_PRESET_STORAGE_KEY = "qwenTtsInstructionPreset";
-
 export const DEFAULT_TTS_VOICE =
   "qwen-audio-3.0-tts-flash-longyuyaoluan";
-export const DEFAULT_TTS_LANGUAGE_HINT = "en";
 export const DEFAULT_TTS_INSTRUCTION_PRESET = "none";
-
-export const QWEN_TTS_LANGUAGE_HINTS = [
-  { label: "English", value: "en" },
-  { label: "中文", value: "zh" },
-];
+export const TTS_VOICE_STORAGE_KEY = "qwenTtsVoice";
+export const TTS_INSTRUCTION_PRESET_STORAGE_KEY = "qwenTtsInstructionPreset";
 
 export const QWEN_TTS_INSTRUCTION_PRESETS = {
   none: "",
@@ -34,10 +26,6 @@ export const QWEN_TTS_VOICES: Array<{ label: string; value: string }> = [
   { label: "龙凤岫澈", value: "qwen-audio-3.0-tts-flash-longfengxiuche" },
 ];
 
-const QWEN_TTS_VOICE_IDS = new Set<string>(
-  QWEN_TTS_VOICES.map(({ value }) => value),
-);
-
 const getStoredChoice = (
   storageKey: string,
   allowedValues: ReadonlySet<string>,
@@ -47,28 +35,19 @@ const getStoredChoice = (
     const stored = localStorage.getItem(storageKey);
     if (!stored) return fallback;
     const parsed: unknown = JSON.parse(stored);
-    if (typeof parsed === "string" && allowedValues.has(parsed)) {
-      return parsed;
-    }
-  } catch (error) {
-    console.error(`Failed to read saved Qwen TTS setting ${storageKey}:`, error);
+    return typeof parsed === "string" && allowedValues.has(parsed)
+      ? parsed
+      : fallback;
+  } catch (_error) {
+    return fallback;
   }
-  return fallback;
 };
 
 export const getStoredTtsVoice = (): string => {
   return getStoredChoice(
     TTS_VOICE_STORAGE_KEY,
-    QWEN_TTS_VOICE_IDS,
+    new Set(QWEN_TTS_VOICES.map(({ value }) => value)),
     DEFAULT_TTS_VOICE,
-  );
-};
-
-export const getStoredTtsLanguageHint = (): string => {
-  return getStoredChoice(
-    TTS_LANGUAGE_HINT_STORAGE_KEY,
-    new Set(QWEN_TTS_LANGUAGE_HINTS.map(({ value }) => value)),
-    DEFAULT_TTS_LANGUAGE_HINT,
   );
 };
 
@@ -77,6 +56,17 @@ export const getStoredTtsInstructionPreset = (): string => {
     TTS_INSTRUCTION_PRESET_STORAGE_KEY,
     new Set(Object.keys(QWEN_TTS_INSTRUCTION_PRESETS)),
     DEFAULT_TTS_INSTRUCTION_PRESET,
+  );
+};
+
+export const setCurrentQwenTtsSettings = (
+  voice: string,
+  instructionPreset: string,
+): void => {
+  localStorage.setItem(TTS_VOICE_STORAGE_KEY, JSON.stringify(voice));
+  localStorage.setItem(
+    TTS_INSTRUCTION_PRESET_STORAGE_KEY,
+    JSON.stringify(instructionPreset),
   );
 };
 
@@ -93,7 +83,6 @@ export const getStoredQwenTtsOptions = () => {
   const instructionPreset = getStoredTtsInstructionPreset();
   return {
     voice: getStoredTtsVoice(),
-    language_hint: getStoredTtsLanguageHint(),
     instruction: getTtsInstruction(instructionPreset),
   };
 };

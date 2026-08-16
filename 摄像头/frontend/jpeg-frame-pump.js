@@ -1,5 +1,5 @@
 export class JpegFramePump {
-  constructor({ fps = 25, jpegQuality = 0.8, maxBufferedBytes = 1048576 } = {}) {
+  constructor({ fps = 12, jpegQuality = 0.7, maxBufferedBytes = 65536 } = {}) {
     this.frameIntervalMs = 1000 / Math.max(1, fps);
     this.jpegQuality = jpegQuality;
     this.maxBufferedBytes = maxBufferedBytes;

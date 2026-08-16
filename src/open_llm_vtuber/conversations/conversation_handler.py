@@ -132,6 +132,7 @@ async def handle_individual_interrupt(
                 content=heard_response,
                 name=context.character_config.character_name,
                 avatar=context.character_config.avatar,
+                history_root=context.history_root,
             )
             store_message(
                 conf_uid=context.character_config.conf_uid,
@@ -140,4 +141,5 @@ async def handle_individual_interrupt(
                 content=prompt_builder.load_runtime_prompt(
                     "interrupted_by_user"
                 ),
+                history_root=context.history_root,
             )

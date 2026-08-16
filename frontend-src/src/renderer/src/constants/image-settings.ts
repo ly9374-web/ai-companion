@@ -1,26 +1,34 @@
-export const IMAGE_COMPRESSION_QUALITY_KEY = 'appImageCompressionQuality';
 export const DEFAULT_IMAGE_COMPRESSION_QUALITY = 0.8;
-export const IMAGE_MAX_WIDTH_KEY = 'appImageMaxWidth';
 export const DEFAULT_IMAGE_MAX_WIDTH = 0;
+export const IMAGE_COMPRESSION_QUALITY_KEY = 'appImageCompressionQuality';
+export const IMAGE_MAX_WIDTH_KEY = 'appImageMaxWidth';
 
 export const getStoredImageCompressionQuality = (): number => {
-  const storedQuality = localStorage.getItem(IMAGE_COMPRESSION_QUALITY_KEY);
-  if (storedQuality) {
-    const quality = Number.parseFloat(storedQuality);
-    if (!Number.isNaN(quality) && quality >= 0.1 && quality <= 1.0) {
-      return quality;
-    }
-  }
-  return DEFAULT_IMAGE_COMPRESSION_QUALITY;
+  const value = Number.parseFloat(
+    localStorage.getItem(IMAGE_COMPRESSION_QUALITY_KEY) ?? '',
+  );
+  return !Number.isNaN(value) && value >= 0.1 && value <= 1
+    ? value
+    : DEFAULT_IMAGE_COMPRESSION_QUALITY;
 };
 
 export const getStoredImageMaxWidth = (): number => {
-  const storedMaxWidth = localStorage.getItem(IMAGE_MAX_WIDTH_KEY);
-  if (storedMaxWidth) {
-    const maxWidth = Number.parseInt(storedMaxWidth, 10);
-    if (!Number.isNaN(maxWidth) && maxWidth >= 0) {
-      return maxWidth;
-    }
-  }
-  return DEFAULT_IMAGE_MAX_WIDTH;
+  const value = Number.parseInt(
+    localStorage.getItem(IMAGE_MAX_WIDTH_KEY) ?? '',
+    10,
+  );
+  return !Number.isNaN(value) && value >= 0
+    ? value
+    : DEFAULT_IMAGE_MAX_WIDTH;
+};
+
+export const setCurrentImageSettings = (
+  compressionQuality: number,
+  maxWidth: number,
+): void => {
+  localStorage.setItem(
+    IMAGE_COMPRESSION_QUALITY_KEY,
+    compressionQuality.toString(),
+  );
+  localStorage.setItem(IMAGE_MAX_WIDTH_KEY, maxWidth.toString());
 };
