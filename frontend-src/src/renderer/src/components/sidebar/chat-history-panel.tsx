@@ -5,8 +5,10 @@
 /* eslint-disable import/order */
 /* eslint-disable import/no-extraneous-dependencies */
 /* eslint-disable react/require-default-props */
-import React, { useEffect } from 'react';
-import { Box, Spinner, Flex, Text, Icon } from '@chakra-ui/react';
+import React, { useState } from 'react';
+import {
+  Box, Button, Spinner, Flex, Text, Icon,
+} from '@chakra-ui/react';
 import { sidebarStyles, chatPanelStyles } from './sidebar-styles';
 import { MainContainer, ChatContainer, MessageList as ChatMessageList, Message as ChatMessage, Avatar as ChatAvatar } from '@chatscope/chat-ui-kit-react';
 import '@chatscope/chat-ui-kit-styles/dist/default/styles.min.css';
@@ -16,13 +18,28 @@ import { useConfig } from '@/context/character-config-context';
 import { useWebSocket } from '@/context/websocket-context';
 import { FaTools, FaCheck, FaTimes } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
+import { useAccount } from '@/context/account-context';
+import {
+  QuickStartTopic,
+  useSendTextMessage,
+} from '@/hooks/footer/use-text-input';
+
+const CONVERSATION_STARTERS: { topic: QuickStartTopic; label: string }[] = [
+  { topic: 'english', label: '我想练英语' },
+  { topic: 'work', label: '我想聊工作' },
+  { topic: 'relationships', label: '我想聊关系' },
+  { topic: 'school', label: '我想聊学校' },
+];
 
 // Main component
 function ChatHistoryPanel(): JSX.Element {
   const { t } = useTranslation();
-  const { messages } = useChatHistory(); // Get messages directly from context
+  const { messages, currentHistoryUid } = useChatHistory(); // Get messages directly from context
   const { confName } = useConfig();
   const { baseUrl } = useWebSocket();
+  const { features } = useAccount();
+  const { sendTextMessage } = useSendTextMessage();
+  const [starterPending, setStarterPending] = useState(false);
   const userName = "Me";
 
   const validMessages = messages.filter((msg) => msg.content || // Keep messages with content
@@ -30,6 +47,22 @@ function ChatHistoryPanel(): JSX.Element {
      (msg.type === 'tool_call_status' && msg.status === 'completed') || // Keep completed tools
      (msg.type === 'tool_call_status' && msg.status === 'error'), // Keep error tools
   );
+  const showConversationStarters = (
+    features.conversationStarters
+    && Boolean(currentHistoryUid)
+    && validMessages.some((message) => message.role === 'ai')
+    && !validMessages.some((message) => message.role === 'human')
+  );
+
+  const sendConversationStarter = async (topic: QuickStartTopic, label: string) => {
+    if (starterPending) return;
+    setStarterPending(true);
+    try {
+      await sendTextMessage(label, { quickStartTopic: topic });
+    } finally {
+      setStarterPending(false);
+    }
+  };
 
   return (
     <Box
@@ -53,7 +86,8 @@ function ChatHistoryPanel(): JSX.Element {
                 {t('sidebar.noMessages')}
               </Box>
             ) : (
-              validMessages.map((msg) => {
+              <>
+                {validMessages.map((msg) => {
                 // Check if it's a tool call message
                 if (msg.type === 'tool_call_status') {
                   return (
@@ -135,7 +169,30 @@ function ChatHistoryPanel(): JSX.Element {
                     </ChatAvatar>
                   </ChatMessage>
                 );
-              })
+                })}
+                {showConversationStarters && (
+                  <Flex
+                    wrap="wrap"
+                    gap={2}
+                    px={3}
+                    py={3}
+                    justify="flex-start"
+                  >
+                    {CONVERSATION_STARTERS.map(({ topic, label }) => (
+                      <Button
+                        key={topic}
+                        size="sm"
+                        variant="outline"
+                        colorPalette="blue"
+                        disabled={starterPending}
+                        onClick={() => void sendConversationStarter(topic, label)}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </Flex>
+                )}
+              </>
             )}
           </ChatMessageList>
         </ChatContainer>

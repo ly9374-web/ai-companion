@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -36,6 +37,9 @@ class RagMemory:
     content: str
     type: str
     reference: str
+    created_at: str = ""
+    updated_at: str = ""
+    source_batch_id: str = ""
 
     @property
     def search_text(self) -> str:
@@ -108,14 +112,27 @@ class MemoryRagStore:
 
     @staticmethod
     def _metadata(conf_uid: str, memory: RagMemory) -> dict[str, object]:
+        fingerprint_source = json.dumps(
+            {
+                "search_text": memory.search_text,
+                "created_at": memory.created_at,
+                "updated_at": memory.updated_at,
+                "source_batch_id": memory.source_batch_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         return {
             "conf_uid": conf_uid,
             "count": memory.count,
             "content": memory.content,
             "type": memory.type,
             "reference": memory.reference,
+            "created_at": memory.created_at,
+            "updated_at": memory.updated_at,
+            "source_batch_id": memory.source_batch_id,
             "fingerprint": hashlib.sha256(
-                memory.search_text.encode("utf-8")
+                fingerprint_source.encode("utf-8")
             ).hexdigest(),
         }
 
@@ -179,29 +196,58 @@ class MemoryRagStore:
         threshold: float,
         hybrid_weight: float,
     ) -> list[RagMemory]:
+        results = self.retrieve_many(
+            conf_uid,
+            [query],
+            memories,
+            top_k=top_k,
+            threshold=threshold,
+            hybrid_weight=hybrid_weight,
+        )
+        return results[0] if results else []
+
+    def retrieve_many(
+        self,
+        conf_uid: str,
+        queries: Iterable[str],
+        memories: Iterable[RagMemory],
+        *,
+        top_k: int,
+        threshold: float,
+        hybrid_weight: float,
+    ) -> list[list[RagMemory]]:
+        query_list = [query for query in queries]
         normalized = list(memories)
-        if not query.strip() or not normalized:
+        if not query_list:
             return []
+        if not normalized:
+            return [[] for _ in query_list]
 
         alpha = min(1.0, max(0.0, hybrid_weight))
-        tokenized_query = _tokenize(query)
+        tokenized_queries = [_tokenize(query) for query in query_list]
+        tokenized_documents = [_tokenize(memory.search_text) for memory in normalized]
 
         # A zero vector weight is a genuinely keyword-only path: it does not
         # load the embedding model, access Chroma, or apply the vector threshold.
         if alpha == 0.0:
-            tokenized_documents = [
-                _tokenize(memory.search_text) for memory in normalized
-            ]
-            if not tokenized_query or not any(tokenized_documents):
-                return []
+            if not any(tokenized_documents):
+                return [[] for _ in query_list]
             bm25 = BM25Okapi(tokenized_documents)
-            bm25_scores = bm25.get_scores(tokenized_query)
-            ranked_indices = [
-                index
-                for index in np.argsort(bm25_scores)[::-1]
-                if bm25_scores[index] > 0
-            ]
-            return [normalized[index] for index in ranked_indices[:top_k]]
+            results: list[list[RagMemory]] = []
+            for tokenized_query in tokenized_queries:
+                if not tokenized_query:
+                    results.append([])
+                    continue
+                bm25_scores = bm25.get_scores(tokenized_query)
+                ranked_indices = [
+                    index
+                    for index in np.argsort(bm25_scores)[::-1]
+                    if bm25_scores[index] > 0
+                ]
+                results.append(
+                    [normalized[index] for index in ranked_indices[:top_k]]
+                )
+            return results
 
         with self._lock:
             self.sync(conf_uid, normalized)
@@ -213,11 +259,12 @@ class MemoryRagStore:
 
             ids = list(stored.get("ids", []))
             if not ids:
-                return []
+                return [[] for _ in query_list]
             metadatas = list(stored.get("metadatas", []))
             embeddings = np.asarray(stored.get("embeddings", []), dtype=np.float32)
-            query_embedding = np.asarray(self._embed([query])[0], dtype=np.float32)
-            similarities = embeddings @ query_embedding
+            query_embeddings = np.asarray(
+                self._embed(query_list), dtype=np.float32
+            )
 
             documents = [
                 RagMemory(
@@ -225,52 +272,61 @@ class MemoryRagStore:
                     content=str(metadata.get("content", "")),
                     type=str(metadata.get("type", "")),
                     reference=str(metadata.get("reference", "")),
+                    created_at=str(metadata.get("created_at", "")),
+                    updated_at=str(metadata.get("updated_at", "")),
+                    source_batch_id=str(metadata.get("source_batch_id", "")),
                 )
                 for metadata in metadatas
             ]
             by_id = dict(zip(ids, documents))
-            similarity_by_id = {
-                memory_id: float(score) for memory_id, score in zip(ids, similarities)
-            }
-
-        candidate_k = min(len(ids), max(top_k, top_k * CANDIDATE_MULTIPLIER))
-        vector_ids = sorted(
-            ids,
-            key=lambda memory_id: similarity_by_id[memory_id],
-            reverse=True,
-        )[:candidate_k]
 
         tokenized_documents = [_tokenize(memory.search_text) for memory in documents]
-        if tokenized_query and any(tokenized_documents):
-            bm25 = BM25Okapi(tokenized_documents)
-            bm25_scores = bm25.get_scores(tokenized_query)
-            bm25_ids = [
-                ids[index]
-                for index in np.argsort(bm25_scores)[::-1][:candidate_k]
-                if bm25_scores[index] > 0
-            ]
-        else:
-            bm25_ids = []
 
-        if alpha == 1.0:
-            ranked_ids = vector_ids
-        else:
-            scores: dict[str, float] = {}
-            for rank, memory_id in enumerate(vector_ids, start=1):
-                scores[memory_id] = alpha / (RRF_K + rank)
-            for rank, memory_id in enumerate(bm25_ids, start=1):
-                scores[memory_id] = scores.get(memory_id, 0.0) + (
-                    (1.0 - alpha) / (RRF_K + rank)
-                )
-            ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)
-
-        if alpha > 0.0:
-            ranked_ids = [
+        candidate_k = min(len(ids), max(top_k, top_k * CANDIDATE_MULTIPLIER))
+        bm25 = BM25Okapi(tokenized_documents) if any(tokenized_documents) else None
+        all_results: list[list[RagMemory]] = []
+        for query_index, tokenized_query in enumerate(tokenized_queries):
+            similarities = embeddings @ query_embeddings[query_index]
+            similarity_by_id = {
+                memory_id: float(score)
+                for memory_id, score in zip(ids, similarities)
+            }
+            vector_ids = [
                 memory_id
-                for memory_id in ranked_ids
-                if similarity_by_id.get(memory_id, -1.0) >= threshold
-            ]
-        return [by_id[memory_id] for memory_id in ranked_ids[:top_k]]
+                for memory_id in sorted(
+                    ids,
+                    key=lambda candidate_id: similarity_by_id[candidate_id],
+                    reverse=True,
+                )
+                if similarity_by_id[memory_id] >= threshold
+            ][:candidate_k]
+
+            if bm25 is not None and tokenized_query:
+                bm25_scores = bm25.get_scores(tokenized_query)
+                bm25_ids = [
+                    ids[index]
+                    for index in np.argsort(bm25_scores)[::-1][:candidate_k]
+                    if bm25_scores[index] > 0
+                ]
+            else:
+                bm25_ids = []
+
+            if alpha == 1.0:
+                ranked_ids = vector_ids
+            else:
+                scores: dict[str, float] = {}
+                for rank, memory_id in enumerate(vector_ids, start=1):
+                    scores[memory_id] = alpha / (RRF_K + rank)
+                for rank, memory_id in enumerate(bm25_ids, start=1):
+                    scores[memory_id] = scores.get(memory_id, 0.0) + (
+                        (1.0 - alpha) / (RRF_K + rank)
+                    )
+                ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)
+
+            all_results.append(
+                [by_id[memory_id] for memory_id in ranked_ids[:top_k]]
+            )
+        return all_results
 
 
 memory_rag_store = MemoryRagStore()

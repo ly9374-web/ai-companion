@@ -130,6 +130,8 @@ class WebSocketService {
 
   private accountName: string | null = null;
 
+  private sessionToken: string | null = null;
+
   private connectionGeneration = 0;
 
   static getInstance() {
@@ -188,7 +190,7 @@ class WebSocketService {
   }
 
   connect(url: string) {
-    if (!this.accountName) {
+    if (!this.accountName || !this.sessionToken) {
       this.disconnect();
       return;
     }
@@ -197,6 +199,7 @@ class WebSocketService {
     try {
       const authenticatedUrl = new URL(url);
       authenticatedUrl.searchParams.set('account', this.accountName);
+      authenticatedUrl.searchParams.set('session', this.sessionToken);
       const socket = new WebSocket(authenticatedUrl.toString());
       const generation = this.connectionGeneration;
       this.ws = socket;
@@ -283,11 +286,12 @@ class WebSocketService {
     this.stateSubject.next('CLOSED');
   }
 
-  setAccount(accountName: string | null) {
-    if (this.accountName !== accountName) {
+  setAccount(accountName: string | null, sessionToken: string | null = null) {
+    if (this.accountName !== accountName || this.sessionToken !== sessionToken) {
       this.disconnect();
     }
     this.accountName = accountName;
+    this.sessionToken = sessionToken;
   }
 
   getCurrentState() {

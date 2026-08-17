@@ -17,12 +17,15 @@ from prompts import prompt_builder
 from .chat_history_manager import (
     get_character_history_dir,
     get_metadata,
+    get_recent_normal_turns,
     update_metadate,
 )
+from .conversation_state_manager import read_legacy_states, read_state, write_state
 
 
 UPDATE_INTERVAL = 6
 INJECTION_INTERVAL = 6
+CONTEXT_TURN_LIMIT = 15
 SHORT_TERM_RELATIONSHIP_METADATA_KEY = "short_term_relationship"
 SHORT_TERM_RELATIONSHIP_PLACEHOLDER = json.dumps(
     {
@@ -66,13 +69,13 @@ class ShortTermRelationshipManager:
         self.history_root = Path(history_root)
         self.update_interval = update_interval
         self.injection_interval = injection_interval
-        self._history_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._history_locks: dict[str, asyncio.Lock] = {}
         self._relationship_locks: dict[str, asyncio.Lock] = {}
         self._update_locks: dict[str, asyncio.Lock] = {}
-        self._summary_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._summary_locks: dict[str, asyncio.Lock] = {}
 
     def _get_history_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
-        key = (conf_uid, history_uid)
+        key = conf_uid
         lock = self._history_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
@@ -110,7 +113,7 @@ class ShortTermRelationshipManager:
         return lock
 
     def _get_summary_lock(self, conf_uid: str, history_uid: str) -> asyncio.Lock:
-        key = (conf_uid, history_uid)
+        key = conf_uid
         lock = self._summary_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
@@ -167,29 +170,72 @@ class ShortTermRelationshipManager:
         return relationship
 
     def _get_state(self, conf_uid: str, history_uid: str) -> dict:
-        if "history_root" in inspect.signature(get_metadata).parameters:
-            metadata = get_metadata(
-                conf_uid,
-                history_uid,
-                history_root=self.history_root,
+        if self.relationship_path is not None:
+            metadata = (
+                get_metadata(
+                    conf_uid,
+                    history_uid,
+                    history_root=self.history_root,
+                )
+                if "history_root" in inspect.signature(get_metadata).parameters
+                else get_metadata(conf_uid, history_uid)
             )
-        else:
-            metadata = get_metadata(conf_uid, history_uid)
-        state = metadata.get(SHORT_TERM_RELATIONSHIP_METADATA_KEY, {})
-        if not isinstance(state, dict):
-            return {}
+            state = metadata.get(SHORT_TERM_RELATIONSHIP_METADATA_KEY, {})
+            return state.copy() if isinstance(state, dict) else {}
+        state = read_state(
+            conf_uid,
+            SHORT_TERM_RELATIONSHIP_METADATA_KEY,
+            self.history_root,
+        )
+        if state is not None:
+            return state
+
+        pending_turns: list[dict[str, str]] = []
+        user_prompt_count = 0
+        for _, legacy_state in read_legacy_states(
+            conf_uid,
+            SHORT_TERM_RELATIONSHIP_METADATA_KEY,
+            self.history_root,
+        ):
+            legacy_pending = legacy_state.get("pending_turns", [])
+            if isinstance(legacy_pending, list):
+                pending_turns.extend(
+                    turn.copy() for turn in legacy_pending if isinstance(turn, dict)
+                )
+            legacy_prompts = legacy_state.get("user_prompt_count", 0)
+            if not isinstance(legacy_prompts, bool) and isinstance(
+                legacy_prompts, int
+            ):
+                user_prompt_count += max(0, legacy_prompts)
+        state = {
+            "pending_turns": pending_turns,
+            "user_prompt_count": user_prompt_count,
+        }
+        write_state(
+            conf_uid,
+            SHORT_TERM_RELATIONSHIP_METADATA_KEY,
+            state,
+            self.history_root,
+        )
         return state.copy()
 
     def _save_state(self, conf_uid: str, history_uid: str, state: dict) -> bool:
-        metadata = {SHORT_TERM_RELATIONSHIP_METADATA_KEY: state}
-        if "history_root" in inspect.signature(update_metadate).parameters:
-            return update_metadate(
-                conf_uid,
-                history_uid,
-                metadata,
-                history_root=self.history_root,
-            )
-        return update_metadate(conf_uid, history_uid, metadata)
+        if self.relationship_path is not None:
+            metadata = {SHORT_TERM_RELATIONSHIP_METADATA_KEY: state}
+            if "history_root" in inspect.signature(update_metadate).parameters:
+                return update_metadate(
+                    conf_uid,
+                    history_uid,
+                    metadata,
+                    history_root=self.history_root,
+                )
+            return update_metadate(conf_uid, history_uid, metadata)
+        return write_state(
+            conf_uid,
+            SHORT_TERM_RELATIONSHIP_METADATA_KEY,
+            state,
+            self.history_root,
+        )
 
     @staticmethod
     def _read_text(path: Path) -> str:
@@ -308,7 +354,7 @@ class ShortTermRelationshipManager:
         summarize: RelationshipSummaryCallback,
         browser_time: str = "",
     ) -> bool:
-        """Record a turn and rewrite the short relationship from the latest six."""
+        """Record a turn and rewrite the relationship from up to 15 recent turns."""
         should_summarize = await self.record_turn(
             conf_uid,
             history_uid,
@@ -398,15 +444,23 @@ class ShortTermRelationshipManager:
             pending_turns = state.get("pending_turns", [])
             if not isinstance(pending_turns, list):
                 pending_turns = []
-            latest_turns = (
+            turns_to_consume = (
                 pending_turns[: self.update_interval]
                 if require_full_batch
                 else pending_turns[:]
             )
-            if not latest_turns:
+            if not turns_to_consume:
                 return "empty"
-            if require_full_batch and len(latest_turns) < self.update_interval:
+            if require_full_batch and len(turns_to_consume) < self.update_interval:
                 return "empty"
+
+        latest_turns = get_recent_normal_turns(
+            conf_uid,
+            CONTEXT_TURN_LIMIT,
+            self.history_root,
+        )
+        if not latest_turns:
+            latest_turns = turns_to_consume[-CONTEXT_TURN_LIMIT:]
 
         relationship_path = self._get_relationship_path(conf_uid)
         long_term_relationship_path = self._get_long_term_relationship_path(
@@ -445,7 +499,7 @@ class ShortTermRelationshipManager:
             latest_pending = state.get("pending_turns", [])
             if not isinstance(latest_pending, list):
                 latest_pending = []
-            state["pending_turns"] = latest_pending[len(latest_turns) :]
+            state["pending_turns"] = latest_pending[len(turns_to_consume) :]
             if not self._save_state(conf_uid, history_uid, state):
                 logger.error(
                     "Manual short relationship was saved but its checkpoint failed for {}",
@@ -454,8 +508,9 @@ class ShortTermRelationshipManager:
                 return "error"
 
         logger.info(
-            "Short-term relationship summary processed {} pending turns",
+            "Short-term relationship summary used {} recent turns and processed {} pending turns",
             len(latest_turns),
+            len(turns_to_consume),
         )
         return "success"
 

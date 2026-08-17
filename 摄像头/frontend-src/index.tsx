@@ -17,7 +17,7 @@ import { sidebarStyles } from '@/components/sidebar/sidebar-styles';
 import { getCurrentBaseUrl } from '@/constants/connection-settings';
 
 interface EmotionAggregate {
-  emotion_sequence: string[][];
+  emotions: string[];
   valid_duration_ms: number;
 }
 

@@ -11,15 +11,13 @@ SUPPORTED_EMOTIONS = {
     "sad",
     "angry",
     "surprise",
-    "disgust",
 }
 EMOTION_LABELS_ZH = {
-    "neutral": "平静",
+    "neutral": "中性",
     "happy": "开心",
     "sad": "悲伤",
     "angry": "愤怒",
     "surprise": "惊讶",
-    "disgust": "厌恶",
 }
 
 
@@ -31,30 +29,22 @@ def build_request_context(optional_contexts: Any) -> str:
     if not isinstance(aggregate, dict):
         return ""
 
-    raw_sequence = aggregate.get("emotion_sequence")
-    if not isinstance(raw_sequence, list) or not 1 <= len(raw_sequence) <= 512:
+    raw_emotions = aggregate.get("emotions")
+    if not isinstance(raw_emotions, list) or not 1 <= len(raw_emotions) <= 2:
         return ""
 
-    sequence: list[list[str]] = []
-    for raw_emotions in raw_sequence:
-        if not isinstance(raw_emotions, list) or not 1 <= len(raw_emotions) <= 2:
+    emotions: list[str] = []
+    for raw_emotion in raw_emotions:
+        if not isinstance(raw_emotion, str):
             return ""
-        emotions: list[str] = []
-        for raw_emotion in raw_emotions:
-            if not isinstance(raw_emotion, str):
-                return ""
-            emotion = raw_emotion.strip().lower()
-            if emotion not in SUPPORTED_EMOTIONS or emotion in emotions:
-                return ""
-            emotions.append(emotion)
-        if "neutral" in emotions and len(emotions) != 1:
+        emotion = raw_emotion.strip().lower()
+        if emotion not in SUPPORTED_EMOTIONS or emotion in emotions:
             return ""
-        sequence.append(emotions)
+        emotions.append(emotion)
 
-    if len(sequence) > 1:
-        # Mixed neutral stages are meaningful only between two expression stages.
-        if "neutral" in sequence[0] or "neutral" in sequence[-1]:
-            return ""
+    # Neutral is always a single fallback result, never part of an ambiguous pair.
+    if "neutral" in emotions and len(emotions) != 1:
+        return ""
 
     valid_duration_ms = aggregate.get("valid_duration_ms")
     if (
@@ -64,9 +54,6 @@ def build_request_context(optional_contexts: Any) -> str:
     ):
         return ""
 
-    labels = [
-        "或".join(EMOTION_LABELS_ZH[emotion] for emotion in emotions)
-        for emotions in sequence
-    ]
-    label = labels[0] if len(labels) == 1 else f"先{'转为'.join(labels)}"
-    return f"用户当前的表情为：{label}"
+    labels = [EMOTION_LABELS_ZH[emotion] for emotion in emotions]
+    label = labels[0] if len(labels) == 1 else f"先{labels[0]}转为{labels[1]}"
+    return f"你看到用户回复你时的表情为：{label}"

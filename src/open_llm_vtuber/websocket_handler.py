@@ -12,7 +12,11 @@ from .chat_history_manager import (
     get_history,
     delete_history,
     get_history_list,
+    get_recent_normal_history_messages,
+    render_history_message_for_frontend,
+    store_message,
 )
+from .conversation_starters import WELCOME_MESSAGE
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
 from .config_manager.tts import QWEN_TTS_VOICES
 from .conversations.conversation_handler import (
@@ -47,6 +51,7 @@ class WSMessage(TypedDict, total=False):
     grok_enabled: Optional[bool]
     qwen_api_key: Optional[str]
     optional_contexts: Optional[dict]
+    quick_start_topic: Optional[str]
 
 
 class WebSocketHandler:
@@ -362,11 +367,7 @@ class WebSocketHandler:
         )
 
         messages = [
-            {
-                key: value
-                for key, value in msg.items()
-                if key != "context_injections"
-            }
+            render_history_message_for_frontend(msg)
             for msg in get_history(
                 context.character_config.conf_uid,
                 history_uid,
@@ -389,16 +390,47 @@ class WebSocketHandler:
         )
         if history_uid:
             context.history_uid = history_uid
-            context.agent_engine.set_memory_from_history(
-                conf_uid=context.character_config.conf_uid,
-                history_uid=history_uid,
-                history_root=context.history_root,
+            if context.conversation_starters_enabled:
+                store_message(
+                    conf_uid=context.character_config.conf_uid,
+                    history_uid=history_uid,
+                    role="ai",
+                    content=WELCOME_MESSAGE,
+                    name=context.character_config.character_name,
+                    avatar=context.character_config.avatar,
+                    history_root=context.history_root,
+                )
+            current_messages = get_history(
+                context.character_config.conf_uid,
+                history_uid,
+                context.history_root,
             )
+            recent_messages = get_recent_normal_history_messages(
+                context.character_config.conf_uid,
+                context.max_history_turns,
+                context.history_root,
+                exclude_history_uid=history_uid,
+            )
+            set_memory_from_messages = getattr(
+                context.agent_engine, "set_memory_from_messages", None
+            )
+            if set_memory_from_messages is not None:
+                set_memory_from_messages(recent_messages + current_messages)
+            else:
+                context.agent_engine.set_memory_from_history(
+                    conf_uid=context.character_config.conf_uid,
+                    history_uid=history_uid,
+                    history_root=context.history_root,
+                )
             await websocket.send_text(
                 json.dumps(
                     {
                         "type": "new-history-created",
                         "history_uid": history_uid,
+                        "messages": [
+                            render_history_message_for_frontend(message)
+                            for message in current_messages
+                        ],
                     }
                 )
             )
@@ -576,6 +608,17 @@ class WebSocketHandler:
     ) -> None:
         """Summarize pending completed turns without changing injection timing."""
         context = self.client_contexts[client_uid]
+        if context.debug_mode:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "manual-summary-result",
+                        "long_term_memory": "disabled",
+                        "short_term_relationship": "disabled",
+                    }
+                )
+            )
+            return
         current_task = self.current_conversation_tasks.get(client_uid)
         current_turn_pending = int(
             current_task is not None
@@ -618,18 +661,6 @@ class WebSocketHandler:
                 json.dumps({"type": "manual-summary-duplicate"})
             )
             return
-        if context.debug_mode:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "manual-summary-result",
-                        "long_term_memory": "disabled",
-                        "short_term_relationship": "disabled",
-                    }
-                )
-            )
-            return
-
         history_uid = context.history_uid
         if not history_uid:
             await websocket.send_text(
@@ -646,6 +677,9 @@ class WebSocketHandler:
         summarize_memory = getattr(
             context.agent_engine, "summarize_long_term_memory", None
         )
+        reconcile_memory = getattr(
+            context.agent_engine, "reconcile_long_term_memory", None
+        )
         summarize_short_relationship = getattr(
             context.agent_engine, "summarize_short_term_relationship", None
         )
@@ -660,8 +694,9 @@ class WebSocketHandler:
                     conf_uid=conf_uid,
                     history_uid=history_uid,
                     summarize=summarize_memory,
+                    reconcile=reconcile_memory,
                 )
-                if summarize_memory is not None
+                if summarize_memory is not None and reconcile_memory is not None
                 else "unsupported"
             )
             relationship_result = (
@@ -751,34 +786,12 @@ class WebSocketHandler:
             return
 
         conf_uid = context.character_config.conf_uid
-        messages = get_history(conf_uid, history_uid, context.history_root)
-        turns, start_turn, end_turn = context.rolling_summary_manager.select_turns(
-            messages,
-            context.max_history_turns,
-        )
-        if not turns:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "debug-rolling-summary-result",
-                        "status": "empty",
-                    }
-                )
-            )
-            return
-
-        completed_turns = sum(
-            1 for message in messages if message.get("role") == "ai"
-        )
         future = context.summary_coordinator.enqueue(
             "rolling_debug",
-            lambda: context.rolling_summary_manager.generate_and_store(
+            lambda: context.rolling_summary_manager.generate_next_batch(
                 conf_uid=conf_uid,
                 history_uid=history_uid,
-                turns=turns,
-                start_turn=start_turn,
-                end_turn=end_turn,
-                generated_at_turn=completed_turns,
+                batch_size=context.max_history_turns,
                 summarize=summarize,
                 force=True,
             ),
@@ -838,6 +851,30 @@ class WebSocketHandler:
         self.client_contexts[client_uid].set_max_history_turns(
             max_history_turns
         )
+        context = self.client_contexts[client_uid]
+        summarize_rolling = getattr(
+            context.agent_engine, "summarize_rolling_context", None
+        )
+        if (
+            context.history_uid
+            and not context.debug_mode
+            and summarize_rolling is not None
+            and not context.summary_coordinator.has_prefix(("rolling",))
+        ):
+            context.summary_coordinator.enqueue(
+                f"rolling:{context.history_uid}:resize",
+                lambda conf_uid=context.character_config.conf_uid,
+                history_uid=context.history_uid,
+                batch_size=max_history_turns,
+                callback=summarize_rolling: (
+                    context.rolling_summary_manager.generate_ready_batches(
+                        conf_uid=conf_uid,
+                        history_uid=history_uid,
+                        batch_size=batch_size,
+                        summarize=callback,
+                    )
+                ),
+            )
 
         await websocket.send_text(
             json.dumps(

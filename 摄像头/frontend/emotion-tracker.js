@@ -1,58 +1,58 @@
+import { RAW_EMOTION_MODEL } from './emotion-model.js';
+
 const BASELINE_COUNTDOWN_MS = 3000;
 const BASELINE_WINDOW_MS = 1100;
-const SMOOTHING_WINDOW_MS = 280;
+const SMOOTHING_WINDOW_MS = 550;
 const EXPRESSION_STABILITY_MS = 280;
 const AMBIGUOUS_STABILITY_MS = 360;
 const NEUTRAL_STABILITY_MS = 450;
-const NEUTRAL_ACTIVITY_THRESHOLD = 0.055;
-const MIN_EXPRESSION_SCORE = 0.55;
-const MIN_SCORE_MARGIN = 0.10;
-const EXPRESSION_AU_TRIGGER_THRESHOLD = 0.13;
-const IGNORED_INFERENCE_AUS = new Set(['AU43']);
+const MINIMUM_SIGNAL_NORM = 0.12;
+const MINIMUM_EMOTION_SIMILARITY = 0.75;
+const MINIMUM_TEMPLATE_SCALE = 0;
+const MAXIMUM_RESIDUAL_RATIO = 1;
+const MINIMUM_EFFECTIVE_AUS = 1;
+const NOISE_MULTIPLIER = 2.5;
+const MINIMUM_NOISE_FLOOR = 0.015;
 
-const EMOTION_TRIGGER_AUS = {
-  surprise: ['AU1', 'AU2', 'AU5', 'AU26'],
-  sad: ['AU1', 'AU4', 'AU15'],
-  angry: ['AU4', 'AU5', 'AU10', 'AU17', 'AU20', 'AU25'],
-  disgust: ['AU9', 'AU10', 'AU17'],
-  happy: ['AU6', 'AU12'],
-};
+const INFERRED_EXPRESSION_LABELS = new Set(['愤怒', '开心', '悲伤', '惊讶']);
+const MODEL_LABELS = Object.freeze({
+  愤怒: 'angry',
+  开心: 'happy',
+  悲伤: 'sad',
+  惊讶: 'surprise',
+});
 
-// The calibrated variants come from the reference v3 frozen samples. They
-// intentionally score AU proportions rather than cloud emotion confidence.
-const EMOTION_PROTOTYPES = {
-  surprise: [
-    { AU1: 0.28, AU2: 0.28, AU5: 0.22, AU26: 0.22 },
-    { AU1: 0.38, AU2: 0.38, AU5: 0.24 },
-    { AU1: 0.42, AU2: 0.38, AU26: 0.20 },
-  ],
-  sad: [
-    { AU1: 0.35, AU4: 0.38, AU15: 0.27 },
-    { AU1: 0.42, AU4: 0.38, AU17: 0.20 },
-    { AU1: 0.42, AU15: 0.36, AU17: 0.22 },
-    { AU15: 0.18, AU20: 0.16, AU1: 0.14, AU17: 0.14, AU2: 0.11, AU9: 0.10, AU6: 0.08, AU26: 0.05, AU12: 0.04 },
-  ],
-  angry: [
-    { AU4: 0.45, AU5: 0.18, AU10: 0.16, AU17: 0.11, AU25: 0.10 },
-    { AU4: 0.52, AU5: 0.22, AU20: 0.14, AU25: 0.12 },
-    { AU4: 0.58, AU10: 0.22, AU17: 0.20 },
-    { AU4: 0.56, AU9: 0.20, AU10: 0.12, AU6: 0.12 },
-    { AU4: 0.34, AU9: 0.20, AU6: 0.10, AU20: 0.09, AU12: 0.08, AU15: 0.06, AU10: 0.05, AU14: 0.04, AU17: 0.04 },
-  ],
-  disgust: [
-    { AU9: 0.55, AU17: 0.25, AU4: 0.20 },
-    { AU10: 0.55, AU17: 0.25, AU4: 0.20 },
-    { AU9: 0.62, AU10: 0.38 },
-    { AU9: 0.40, AU4: 0.28, AU17: 0.17, AU6: 0.15 },
-    { AU9: 0.18, AU4: 0.16, AU6: 0.15, AU25: 0.13, AU12: 0.09, AU15: 0.08, AU10: 0.08, AU14: 0.06, AU26: 0.03, AU1: 0.02, AU20: 0.02 },
-  ],
-  happy: [
-    { AU12: 0.58, AU6: 0.42 },
-    { AU12: 0.74, AU6: 0.26 },
-    { AU12: 1.00 },
-    { AU12: 0.24, AU6: 0.19, AU25: 0.18, AU10: 0.13, AU14: 0.13, AU20: 0.07, AU17: 0.04, AU2: 0.02 },
-  ],
-};
+// These four additional sadness samples and the class filter mirror the
+// currently active v4 mapping in emotion_camera算法支持.
+const ADDITIONAL_SADNESS_TEMPLATES = Object.freeze([
+  Object.freeze([0.0, 0.012161, 0.0, 0.000076, 0.083633, 0.041779, 0.137466, 0.087478, 0.047866, 0.105361, 0.105178, 0.106338, 0.05519, 0.071533]),
+  Object.freeze([0.0, 0.017288, 0.0, 0.0, 0.094131, 0.03653, 0.150894, 0.092727, 0.063491, 0.124648, 0.116897, 0.090591, 0.127822, 0.117249]),
+  Object.freeze([0.023071, 0.025833, 0.013351, 0.007888, 0.112197, 0.053253, 0.125503, 0.11824, 0.035903, 0.116836, 0.098342, 0.094497, 0.078872, 0.06665]),
+  Object.freeze([0.057495, 0.045852, 0.0, 0.0, 0.093276, 0.024323, 0.136245, 0.094131, 0.050796, 0.108047, 0.109634, 0.108169, 0.061721, 0.05722]),
+]);
+
+const EMOTION_MODEL = Object.freeze({
+  ...RAW_EMOTION_MODEL,
+  version: 'personal-au-templates-v4',
+  sourceRecordCount: Number(RAW_EMOTION_MODEL.sourceRecordCount || 0)
+    + ADDITIONAL_SADNESS_TEMPLATES.length,
+  classes: Object.freeze(Object.fromEntries(
+    Object.entries(RAW_EMOTION_MODEL.classes || {})
+      .filter(([label]) => INFERRED_EXPRESSION_LABELS.has(label))
+      .map(([label, profile]) => [
+        label,
+        label === '悲伤'
+          ? Object.freeze({
+            ...profile,
+            templates: Object.freeze([
+              ...profile.templates,
+              ...ADDITIONAL_SADNESS_TEMPLATES,
+            ]),
+          })
+          : profile,
+      ]),
+  )),
+});
 
 function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -89,33 +89,33 @@ function normalizedAuUnits(snapshot) {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
-function cosineSimilarity(left, right) {
-  const names = new Set([...Object.keys(left), ...Object.keys(right)]);
-  let dot = 0;
-  let leftNorm = 0;
-  let rightNorm = 0;
-  for (const name of names) {
-    const a = Number(left[name] || 0);
-    const b = Number(right[name] || 0);
-    dot += a * b;
-    leftNorm += a * a;
-    rightNorm += b * b;
-  }
-  return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
+function vectorNorm(vector) {
+  return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 }
 
-function scoreExpressionProfile(shares, variants) {
-  let best = 0;
-  for (const prototype of variants) {
-    const similarity = cosineSimilarity(shares, prototype);
-    const coverage = Object.keys(prototype)
-      .reduce((sum, au) => sum + (shares[au] || 0), 0);
-    best = Math.max(
-      best,
-      similarity * 0.72 + Math.min(1, coverage * 1.35) * 0.28,
-    );
+function templateMatchMetrics(vector, template, queryNorm) {
+  let dot = 0;
+  let templateSquared = 0;
+  const length = Math.max(vector.length, template.length);
+  for (let index = 0; index < length; index += 1) {
+    const queryValue = Number(vector[index] || 0);
+    const templateValue = Number(template[index] || 0);
+    dot += queryValue * templateValue;
+    templateSquared += templateValue * templateValue;
   }
-  return Math.min(0.96, best);
+  const templateNorm = Math.sqrt(templateSquared);
+  const similarity = queryNorm && templateNorm ? dot / (queryNorm * templateNorm) : 0;
+  const scale = templateSquared ? Math.max(0, dot / templateSquared) : 0;
+  let residualSquared = 0;
+  for (let index = 0; index < length; index += 1) {
+    const delta = Number(vector[index] || 0) - scale * Number(template[index] || 0);
+    residualSquared += delta * delta;
+  }
+  return {
+    similarity,
+    scale,
+    residualRatio: queryNorm ? Math.sqrt(residualSquared) / queryNorm : 1,
+  };
 }
 
 function inferenceLabels(result) {
@@ -219,52 +219,42 @@ export class EmotionTracker {
   }
 
   inferExpression(currentUnits) {
-    const signals = {};
-    const rawPositiveChanges = {};
-    let activitySquared = 0;
-    const names = new Set([...Object.keys(this.baselineAu), ...Object.keys(currentUnits)]);
-    for (const name of names) {
-      if (IGNORED_INFERENCE_AUS.has(name)) continue;
+    const vector = EMOTION_MODEL.features.map((name) => {
       const rawChange = Number(currentUnits[name] ?? this.baselineAu[name])
         - Number(this.baselineAu[name] ?? currentUnits[name]);
-      rawPositiveChanges[name] = Math.max(0, rawChange);
-      const noiseFloor = Math.max(0.015, Number(this.auNoise[name] || 0) * 2.5);
-      const signal = Math.max(0, rawChange - noiseFloor);
-      if (signal > 0) signals[name] = signal;
-      activitySquared += signal * signal;
-    }
+      const noiseFloor = Math.max(
+        MINIMUM_NOISE_FLOOR,
+        Number(this.auNoise[name] || 0) * NOISE_MULTIPLIER,
+      );
+      return Math.sign(rawChange) * Math.max(0, Math.abs(rawChange) - noiseFloor);
+    });
+    const queryNorm = vectorNorm(vector);
+    const signalL1 = vector.reduce((sum, value) => sum + Math.abs(value), 0);
+    const effectiveAuCount = queryNorm
+      ? signalL1 * signalL1 / (queryNorm * queryNorm)
+      : 0;
 
-    const activity = Math.sqrt(activitySquared);
-    const total = Object.values(signals).reduce((sum, value) => sum + value, 0);
-    if (activity < NEUTRAL_ACTIVITY_THRESHOLD || total <= 0) {
-      return { state: 'neutral', emotions: ['neutral'] };
-    }
-
-    const shares = Object.fromEntries(
-      Object.entries(signals).map(([name, value]) => [name, value / total]),
-    );
-    const ranked = Object.entries(EMOTION_PROTOTYPES)
-      .map(([emotion, variants]) => {
-        const trigger = EMOTION_TRIGGER_AUS[emotion]
-          .map((au) => ({ au, change: rawPositiveChanges[au] || 0 }))
-          .sort((left, right) => right.change - left.change)[0];
-        return { emotion, score: scoreExpressionProfile(shares, variants), trigger };
+    const ranked = Object.entries(EMOTION_MODEL.classes)
+      .map(([label, profile]) => {
+        const match = profile.templates
+          .map((template) => templateMatchMetrics(vector, template, queryNorm))
+          .sort((left, right) => right.similarity - left.similarity)[0];
+        return { label, ...match };
       })
-      .filter((item) => item.trigger.change >= EXPRESSION_AU_TRIGGER_THRESHOLD)
-      .sort((left, right) => right.score - left.score);
-
-    const winner = ranked[0];
-    const runnerUp = ranked[1];
-    if (!winner || winner.score < MIN_EXPRESSION_SCORE) {
+      .sort((left, right) => right.similarity - left.similarity);
+    const winner = ranked.find((candidate) => (
+      candidate.similarity >= MINIMUM_EMOTION_SIMILARITY
+      && candidate.scale >= MINIMUM_TEMPLATE_SCALE
+      && candidate.residualRatio <= MAXIMUM_RESIDUAL_RATIO
+    ));
+    if (
+      !winner
+      || queryNorm < MINIMUM_SIGNAL_NORM
+      || effectiveAuCount < MINIMUM_EFFECTIVE_AUS
+    ) {
       return { state: 'neutral', emotions: ['neutral'] };
     }
-    if (runnerUp && winner.score - runnerUp.score < MIN_SCORE_MARGIN) {
-      return {
-        state: 'ambiguous',
-        emotions: [winner.emotion, runnerUp.emotion],
-      };
-    }
-    return { state: 'expression', emotions: [winner.emotion] };
+    return { state: 'expression', emotions: [MODEL_LABELS[winner.label]] };
   }
 
   publishAuDeltas(currentUnits) {
@@ -439,23 +429,37 @@ export class EmotionTracker {
   aggregateWindow() {
     const totalDuration = Object.values(this.windowDurations)
       .reduce((sum, duration) => sum + duration, 0);
-    const firstExpressionIndex = this.windowEmotionSequence
-      .findIndex((emotions) => !emotions.includes('neutral'));
-    let emotionSequence = [['neutral']];
-    if (firstExpressionIndex >= 0) {
-      let lastExpressionIndex = this.windowEmotionSequence.length - 1;
-      while (
-        lastExpressionIndex > firstExpressionIndex
-        && this.windowEmotionSequence[lastExpressionIndex].includes('neutral')
-      ) {
-        lastExpressionIndex -= 1;
-      }
-      emotionSequence = this.windowEmotionSequence
-        .slice(firstExpressionIndex, lastExpressionIndex + 1)
-        .map((emotions) => [...emotions]);
-    }
+    const firstSeen = new Map();
+    this.windowEmotionSequence.forEach((emotions, sequenceIndex) => {
+      emotions.forEach((emotion, emotionIndex) => {
+        if (!firstSeen.has(emotion)) {
+          firstSeen.set(emotion, sequenceIndex * 2 + emotionIndex);
+        }
+      });
+    });
+
+    const durationEntries = Object.entries(this.windowDurations)
+      .filter(([, duration]) => duration > 0);
+    const nonNeutralEntries = durationEntries
+      .filter(([emotion]) => emotion !== 'neutral');
+    const candidates = nonNeutralEntries.length
+      ? nonNeutralEntries
+      : durationEntries.filter(([emotion]) => emotion === 'neutral');
+    const emotions = candidates
+      .sort((left, right) => (
+        right[1] - left[1]
+        || (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
+          - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
+      ))
+      .slice(0, 2)
+      .sort((left, right) => (
+        (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
+        - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
+      ))
+      .map(([emotion]) => emotion);
+
     return {
-      emotion_sequence: emotionSequence,
+      emotions: emotions.length ? emotions : ['neutral'],
       valid_duration_ms: Math.round(totalDuration),
     };
   }

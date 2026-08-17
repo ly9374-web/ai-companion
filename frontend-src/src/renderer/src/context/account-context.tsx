@@ -3,6 +3,7 @@ import {
 } from 'react';
 import { getCurrentBaseUrl } from '@/constants/connection-settings';
 import {
+  getAccountSessionToken,
   getLastAccountName,
   isAccountSessionActive,
   rememberAuthenticatedAccount,
@@ -18,38 +19,55 @@ interface AccountResult {
   connectionError?: boolean;
 }
 
-type AccountFailure = 'invalid-account' | 'network' | 'server' | 'request';
+interface AccountFeatures {
+  conversationStarters: boolean;
+}
+
+type AccountFailure = 'authentication' | 'network' | 'server' | 'request';
 
 interface AccountContextValue {
   account: string | null;
+  features: AccountFeatures;
   loading: boolean;
-  login: (name: string) => Promise<AccountResult>;
-  register: (name: string) => Promise<AccountResult>;
+  login: (name: string, password: string) => Promise<AccountResult>;
+  register: (name: string, password: string) => Promise<AccountResult>;
   logout: () => void;
 }
 
 const AccountContext = createContext<AccountContextValue | null>(null);
 
 const requestAccount = async (
-  action: 'login' | 'register',
+  action: 'login' | 'register' | 'session',
   name: string,
-): Promise<{ account?: string; error?: string; failure?: AccountFailure }> => {
+  credentials: { password?: string; sessionToken?: string },
+): Promise<{
+  account?: string;
+  sessionToken?: string;
+  features?: Partial<AccountFeatures>;
+  error?: string;
+  failure?: AccountFailure;
+}> => {
   try {
     const response = await fetch(`${getCurrentBaseUrl()}/api/accounts/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: name }),
+      body: JSON.stringify({ account: name, ...credentials }),
     });
     const responseText = await response.text();
-    let payload: { account?: string; error?: string } = {};
+    let payload: {
+      account?: string;
+      sessionToken?: string;
+      features?: Partial<AccountFeatures>;
+      error?: string;
+    } = {};
     try {
       payload = responseText ? JSON.parse(responseText) : {};
     } catch (_error) {
       payload = {};
     }
     if (!response.ok) {
-      const failure: AccountFailure = response.status === 404 && action === 'login'
-        ? 'invalid-account'
+      const failure: AccountFailure = response.status === 401
+        ? 'authentication'
         : response.status >= 500
           ? 'server'
           : 'request';
@@ -58,7 +76,11 @@ const requestAccount = async (
         failure,
       };
     }
-    return { account: payload.account };
+    return {
+      account: payload.account,
+      sessionToken: payload.sessionToken,
+      features: payload.features,
+    };
   } catch (_error) {
     return { error: '无法连接到服务器', failure: 'network' };
   }
@@ -66,46 +88,72 @@ const requestAccount = async (
 
 export function AccountProvider({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<string | null>(null);
+  const [features, setFeatures] = useState<AccountFeatures>({
+    conversationStarters: false,
+  });
   const [loading, setLoading] = useState(isAccountSessionActive());
 
-  const finishAuthentication = useCallback((canonicalAccount: string) => {
-    rememberAuthenticatedAccount(canonicalAccount);
-    wsService.setAccount(canonicalAccount);
+  const finishAuthentication = useCallback((
+    canonicalAccount: string,
+    sessionToken: string,
+    nextFeatures: Partial<AccountFeatures> = {},
+  ) => {
+    rememberAuthenticatedAccount(canonicalAccount, sessionToken);
+    wsService.setAccount(canonicalAccount, sessionToken);
     setAccount(canonicalAccount);
+    setFeatures({
+      conversationStarters: nextFeatures.conversationStarters === true,
+    });
   }, []);
 
-  const login = useCallback(async (name: string): Promise<AccountResult> => {
-    const result = await requestAccount('login', name);
-    if (!result.account) {
+  const login = useCallback(async (
+    name: string,
+    password: string,
+  ): Promise<AccountResult> => {
+    const result = await requestAccount('login', name, { password });
+    if (!result.account || !result.sessionToken) {
       return {
         ok: false,
         error: result.error || '账号错误',
         connectionError: result.failure === 'network',
       };
     }
-    finishAuthentication(result.account);
+    finishAuthentication(result.account, result.sessionToken, result.features);
     return { ok: true };
   }, [finishAuthentication]);
 
-  const register = useCallback(async (name: string): Promise<AccountResult> => {
-    const result = await requestAccount('register', name);
-    if (!result.account) {
+  const register = useCallback(async (
+    name: string,
+    password: string,
+  ): Promise<AccountResult> => {
+    const result = await requestAccount('register', name, { password });
+    if (!result.account || !result.sessionToken) {
       return {
         ok: false,
         error: result.error || '注册失败',
         connectionError: result.failure === 'network',
       };
     }
-    finishAuthentication(result.account);
+    finishAuthentication(result.account, result.sessionToken, result.features);
     return { ok: true };
   }, [finishAuthentication]);
 
   const logout = useCallback(() => {
+    const previousAccount = getLastAccountName();
+    const sessionToken = getAccountSessionToken();
+    if (previousAccount && sessionToken) {
+      void fetch(`${getCurrentBaseUrl()}/api/accounts/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account: previousAccount, sessionToken }),
+      }).catch(() => undefined);
+    }
     audioTaskQueue.clearQueue();
     audioManager.stopCurrentAudioAndLipSync();
     wsService.setAccount(null);
     rememberLoggedOut();
     setAccount(null);
+    setFeatures({ conversationStarters: false });
     setLoading(false);
   }, []);
 
@@ -115,7 +163,8 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const previousAccount = getLastAccountName();
-    if (!previousAccount) {
+    const sessionToken = getAccountSessionToken();
+    if (!previousAccount || !sessionToken) {
       rememberLoggedOut();
       setLoading(false);
       return;
@@ -124,14 +173,14 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const authenticatePreviousAccount = async (attempt: number): Promise<void> => {
-      const result = await requestAccount('login', previousAccount);
+      const result = await requestAccount('session', previousAccount, { sessionToken });
       if (disposed) return;
       if (result.account) {
-        finishAuthentication(result.account);
+        finishAuthentication(result.account, sessionToken, result.features);
         setLoading(false);
         return;
       }
-      if (result.failure === 'invalid-account') {
+      if (result.failure === 'authentication') {
         rememberLoggedOut();
         setLoading(false);
         return;
@@ -156,11 +205,12 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => ({
     account,
+    features,
     loading,
     login,
     register,
     logout,
-  }), [account, loading, login, register, logout]);
+  }), [account, features, loading, login, register, logout]);
 
   return (
     <AccountContext.Provider value={value}>

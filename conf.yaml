@@ -29,6 +29,7 @@ character_config:
       basic_memory_agent:
         llm_provider: 'deepseek_llm'
         long_term_summary_model: 'deepseek-v4-pro'
+        long_term_reconcile_model: 'deepseek-v4-pro'
         rolling_summary_model: 'deepseek-v4-pro'
         faster_first_response: True
         segment_method: 'pysbd'

@@ -150,7 +150,7 @@ export function createCameraEmotionFeature(config = {}) {
     },
     consumeWindow() {
       const aggregate = tracker.consumeWindow();
-      display.setFinalSequence(aggregate?.emotion_sequence || null);
+      display.setFinal(aggregate?.emotions || null);
       reportDiagnostic(aggregate ? 'aggregate_ready' : 'aggregate_empty', aggregate || {});
       return aggregate;
     },

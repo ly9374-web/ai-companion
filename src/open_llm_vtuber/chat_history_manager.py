@@ -51,14 +51,18 @@ def _write_history_atomic(filepath: str, history_data: list[dict]) -> None:
 
 
 class HistoryMessage(TypedDict):
-    role: Literal["human", "ai"]
+    role: Literal["human", "ai", "system"]
     timestamp: str
     content: str
     # Optional display information for the message
     name: Optional[str]
     avatar: Optional[str]
+    # Optional user-facing text when the model receives a longer hidden prompt.
+    display_content: Optional[str]
     # Hidden model-only context. The frontend must not display this field.
     context_injections: Optional[dict[str, str]]
+    # Debug turns remain inspectable but never enter normal conversation context.
+    debug_mode: Optional[bool]
 
 
 def _is_safe_filename(filename: str) -> bool:
@@ -209,11 +213,13 @@ def create_new_history(
 def store_message(
     conf_uid: str,
     history_uid: str,
-    role: Literal["human", "ai"],
+    role: Literal["human", "ai", "system"],
     content: str,
     name: str | None = None,
     avatar: str | None = None,
+    display_content: str | None = None,
     context_injections: dict[str, str] | None = None,
+    debug_mode: bool = False,
     history_root: str | Path = "chat_history",
 ):
     """Store a message in a specific history file
@@ -225,7 +231,9 @@ def store_message(
         content: Message content
         name: Optional display name (default None)
         avatar: Optional avatar URL (default None)
+        display_content: Optional shorter text returned to the frontend
         context_injections: Optional model-only context snapshots
+        debug_mode: Whether this message belongs to a debug-only turn
     """
     if not conf_uid or not history_uid:
         if not conf_uid:
@@ -256,15 +264,116 @@ def store_message(
             new_item["name"] = name
         if avatar is not None:
             new_item["avatar"] = avatar
+        if display_content is not None:
+            new_item["display_content"] = display_content
         if context_injections:
             new_item["context_injections"] = {
                 key: value
                 for key, value in context_injections.items()
                 if isinstance(value, str) and value.strip()
             }
+        if debug_mode:
+            new_item["debug_mode"] = True
         history_data.append(new_item)
         _write_history_atomic(filepath, history_data)
     logger.debug(f"Successfully stored {role} message")
+
+
+def render_history_message_for_frontend(message: dict) -> dict:
+    """Remove model-only fields and apply an optional user-facing message label."""
+    rendered = message.copy()
+    rendered.pop("context_injections", None)
+    rendered.pop("debug_mode", None)
+    display_content = rendered.pop("display_content", None)
+    if isinstance(display_content, str) and display_content:
+        rendered["content"] = display_content
+    return rendered
+
+
+def extract_normal_turns(messages: list[dict]) -> list[dict]:
+    """Return complete, non-debug user/assistant turns in message order."""
+    turns: list[dict] = []
+    pending_user: dict | None = None
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role == "human":
+            pending_user = (
+                message
+                if isinstance(content, str) and content.strip()
+                else None
+            )
+            continue
+        if role != "ai" or pending_user is None:
+            continue
+        if not isinstance(content, str) or not content.strip():
+            pending_user = None
+            continue
+        if not pending_user.get("debug_mode") and not message.get("debug_mode"):
+            turns.append(
+                {
+                    "user": pending_user,
+                    "assistant": message,
+                    "timestamp": pending_user.get("timestamp", ""),
+                }
+            )
+        pending_user = None
+    return turns
+
+
+def get_recent_normal_turns(
+    conf_uid: str,
+    limit: int,
+    history_root: str | Path = "chat_history",
+    exclude_history_uid: str | None = None,
+) -> list[dict[str, str]]:
+    """Return recent complete normal turns across one account/character."""
+    if not conf_uid or limit < 1:
+        return []
+    history_dir = Path(_ensure_full_history_dir(conf_uid, history_root))
+    collected: list[tuple[str, str, dict]] = []
+    for path in history_dir.glob("*.json"):
+        history_uid = path.stem
+        if history_uid == exclude_history_uid:
+            continue
+        for turn in extract_normal_turns(
+            get_history(conf_uid, history_uid, history_root)
+        ):
+            collected.append(
+                (str(turn.get("timestamp", "")), history_uid, turn)
+            )
+    collected.sort(key=lambda item: (item[0], item[1]))
+    return [
+        {
+            "user": str(turn["user"].get("content", "")).strip(),
+            "assistant": str(turn["assistant"].get("content", "")).strip(),
+        }
+        for _, _, turn in collected[-limit:]
+    ]
+
+
+def get_recent_normal_history_messages(
+    conf_uid: str,
+    limit: int,
+    history_root: str | Path = "chat_history",
+    exclude_history_uid: str | None = None,
+) -> list[dict]:
+    """Flatten recent cross-history normal turns for model-only preloading."""
+    turns = get_recent_normal_turns(
+        conf_uid,
+        limit,
+        history_root,
+        exclude_history_uid,
+    )
+    messages: list[dict] = []
+    for turn in turns:
+        messages.extend(
+            (
+                {"role": "human", "content": turn["user"]},
+                {"role": "ai", "content": turn["assistant"]},
+            )
+        )
+    return messages
 
 
 def get_metadata(
@@ -458,8 +567,9 @@ def get_history_list(
                         empty_history_uids.append(history_uid)
                         continue
 
-                    latest_message = actual_messages[-1].copy()
-                    latest_message.pop("context_injections", None)
+                    latest_message = render_history_message_for_frontend(
+                        actual_messages[-1]
+                    )
                     history_info = {
                         "uid": history_uid,
                         "latest_message": latest_message,

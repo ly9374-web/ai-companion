@@ -19,12 +19,14 @@ from .conversation_utils import (
 from .types import WebSocketSend
 from .tts_manager import TTSTaskManager
 from ..chat_history_manager import (
+    extract_normal_turns,
     get_history,
     get_metadata,
     store_message,
     update_metadata_state,
 )
 from ..service_context import ServiceContext
+from ..conversation_state_manager import reserve_interval_event
 
 # Import necessary types from agent outputs
 from ..agent.output_types import SentenceOutput, AudioOutput, DisplayText, Actions
@@ -50,6 +52,7 @@ TIME_REQUEST_COMMANDS = {
     "what day is it",
 }
 CONTEXT_INJECTION_SCHEDULE_METADATA_KEY = "context_injection_schedule"
+RELATIONSHIP_INJECTION_STATE_KEY = "relationship_injection_schedule"
 CONTEXT_INJECTION_KEYS = (
     "long_term_relationship_context",
     "short_term_relationship_context",
@@ -67,7 +70,12 @@ def _is_first_turn(
     history_root: str | Path = "chat_history",
 ) -> bool:
     messages = get_history(conf_uid, history_uid, history_root)
-    return not any(message.get("role") in {"human", "ai"} for message in messages)
+    # Eligible accounts seed new histories with an assistant welcome message.
+    # The first actual user message must still receive normal first-turn context.
+    return not any(
+        message.get("role") == "human" and not message.get("debug_mode")
+        for message in messages
+    )
 
 
 def _get_completed_context_turns(
@@ -95,9 +103,7 @@ def _get_completed_context_turns(
             return completed_turns, last_injection_turn
 
     messages = get_history(conf_uid, history_uid, history_root)
-    user_turns = sum(message.get("role") == "human" for message in messages)
-    assistant_turns = sum(message.get("role") == "ai" for message in messages)
-    completed_turns = min(user_turns, assistant_turns)
+    completed_turns = len(extract_normal_turns(messages))
     _save_context_injection_schedule(
         conf_uid,
         history_uid,
@@ -191,13 +197,16 @@ async def process_single_conversation(
 
         skip_history = metadata and metadata.get("skip_history", False)
         request_metadata = dict(metadata or {})
+        is_debug_turn = bool(context.debug_mode and not skip_history)
+        if is_debug_turn:
+            request_metadata["debug_mode"] = True
         browser_time = request_metadata.get("browser_time", "")
         optional_feature_context = request_metadata.pop(
             "optional_feature_context", ""
         )
+        history_display_text = request_metadata.pop("history_display_text", "")
         is_first_turn = False
         completed_context_turns = 0
-        last_relationship_injection_turn: int | None = None
         if context.history_uid and not skip_history:
             is_first_turn = _is_first_turn(
                 context.character_config.conf_uid,
@@ -206,7 +215,7 @@ async def process_single_conversation(
             )
             (
                 completed_context_turns,
-                last_relationship_injection_turn,
+                _,
             ) = _get_completed_context_turns(
                 context.character_config.conf_uid,
                 context.history_uid,
@@ -215,11 +224,15 @@ async def process_single_conversation(
 
         next_turn_number = completed_context_turns + 1
         relationship_injection_interval = context.max_history_turns + 1
-        should_inject_relationships = (
-            last_relationship_injection_turn is None
-            or next_turn_number - last_relationship_injection_turn
-            >= relationship_injection_interval
-        )
+        should_inject_relationships = False
+        if context.history_uid and not skip_history and not is_debug_turn:
+            _, should_inject_relationships = reserve_interval_event(
+                context.character_config.conf_uid,
+                RELATIONSHIP_INJECTION_STATE_KEY,
+                relationship_injection_interval,
+                force=is_first_turn,
+                history_root=context.history_root,
+            )
 
         if is_first_turn:
             activity_lines = [prompt_builder.load_runtime_prompt("new_chat_created")]
@@ -259,12 +272,20 @@ async def process_single_conversation(
                 request_metadata["tts_preference_change_context"] = (
                     tts_preference_change_context
                 )
-        if context.history_uid and not skip_history:
+        if context.history_uid and not skip_history and not is_debug_turn:
+            summarize_rolling_now = getattr(
+                context.agent_engine, "summarize_rolling_context", None
+            )
+            if summarize_rolling_now is not None:
+                await context.rolling_summary_manager.generate_ready_batches(
+                    conf_uid=context.character_config.conf_uid,
+                    history_uid=context.history_uid,
+                    batch_size=context.max_history_turns,
+                    summarize=summarize_rolling_now,
+                )
             rolling_summary = context.rolling_summary_manager.read_injection(
                 context.character_config.conf_uid,
                 context.history_uid,
-                completed_context_turns,
-                context.max_history_turns,
             )
             if rolling_summary:
                 request_metadata["rolling_summary_context"] = (
@@ -319,17 +340,15 @@ async def process_single_conversation(
                 role="human",
                 content=input_text,
                 name=context.character_config.human_name,
+                display_content=(
+                    history_display_text
+                    if isinstance(history_display_text, str) and history_display_text
+                    else None
+                ),
                 context_injections=context_injections,
+                debug_mode=is_debug_turn,
                 history_root=context.history_root,
             )
-            if should_inject_relationships:
-                _save_context_injection_schedule(
-                    context.character_config.conf_uid,
-                    context.history_uid,
-                    history_root=context.history_root,
-                    last_relationship_injection_turn=next_turn_number,
-                )
-
         if skip_history:
             logger.debug("Skipping storing user input to history (proactive speak)")
 
@@ -415,69 +434,56 @@ async def process_single_conversation(
                 content=full_response,
                 name=context.character_config.character_name,
                 avatar=context.character_config.avatar,
+                debug_mode=is_debug_turn,
                 history_root=context.history_root,
             )
-            _save_completed_context_turns(
-                context.character_config.conf_uid,
-                context.history_uid,
-                next_turn_number,
-                context.history_root,
-            )
+            if not is_debug_turn:
+                _save_completed_context_turns(
+                    context.character_config.conf_uid,
+                    context.history_uid,
+                    next_turn_number,
+                    context.history_root,
+                )
 
-            if context.debug_mode:
+            summary_conf_uid = context.character_config.conf_uid
+            summary_history_uid = context.history_uid
+            if is_debug_turn:
                 logger.info(
-                    "Debug mode is enabled; skipping rolling context, long-term "
-                    "memory, short-term relationship, and long-term relationship summaries"
+                    "Debug turn is excluded from rolling summary, long-term memory, "
+                    "short-term relationship, and long-term relationship"
                 )
             else:
-                summary_conf_uid = context.character_config.conf_uid
-                summary_history_uid = context.history_uid
                 summarize_rolling = getattr(
                     context.agent_engine, "summarize_rolling_context", None
                 )
                 if (
                     summarize_rolling is not None
-                    and next_turn_number >= 10
-                    and next_turn_number % 5 == 0
+                    and not context.summary_coordinator.has_prefix(("rolling",))
                 ):
-                    rolling_turns, rolling_start, rolling_end = (
-                        context.rolling_summary_manager.select_turns(
-                            get_history(
-                                context.character_config.conf_uid,
-                                context.history_uid,
-                                context.history_root,
-                            ),
-                            context.max_history_turns,
-                        )
+                    context.summary_coordinator.enqueue(
+                        f"rolling:{summary_history_uid}",
+                        lambda conf_uid=summary_conf_uid,
+                        history_uid=summary_history_uid,
+                        batch_size=context.max_history_turns,
+                        callback=summarize_rolling: (
+                            context.rolling_summary_manager.generate_ready_batches(
+                                conf_uid=conf_uid,
+                                history_uid=history_uid,
+                                batch_size=batch_size,
+                                summarize=callback,
+                            )
+                        ),
                     )
-                    if rolling_turns:
-                        context.summary_coordinator.enqueue(
-                            "rolling",
-                            lambda conf_uid=summary_conf_uid,
-                            history_uid=summary_history_uid,
-                            turns=rolling_turns,
-                            start_turn=rolling_start,
-                            end_turn=rolling_end,
-                            generated_at_turn=next_turn_number,
-                            callback=summarize_rolling: (
-                                context.rolling_summary_manager.generate_and_store(
-                                    conf_uid=conf_uid,
-                                    history_uid=history_uid,
-                                    turns=turns,
-                                    start_turn=start_turn,
-                                    end_turn=end_turn,
-                                    generated_at_turn=generated_at_turn,
-                                    summarize=callback,
-                                )
-                            ),
-                        )
 
                 summarize = getattr(
                     context.agent_engine, "summarize_long_term_memory", None
                 )
-                if summarize is None:
+                reconcile_memory = getattr(
+                    context.agent_engine, "reconcile_long_term_memory", None
+                )
+                if summarize is None or reconcile_memory is None:
                     logger.error(
-                        "The active agent does not support long-term memory summaries"
+                        "The active agent does not support two-stage long-term memory summaries"
                     )
                 else:
                     memory_will_summarize = await context.long_term_memory_manager.record_turn(
@@ -496,12 +502,14 @@ async def process_single_conversation(
                             "long_term_memory",
                             lambda conf_uid=summary_conf_uid,
                             history_uid=summary_history_uid,
-                            callback=summarize: (
+                            callback=summarize,
+                            reconcile_callback=reconcile_memory: (
                                 context.long_term_memory_manager.summarize_pending_turns(
                                     conf_uid=conf_uid,
                                     history_uid=history_uid,
                                     summarize=callback,
                                     require_full_batch=True,
+                                    reconcile=reconcile_callback,
                                 )
                             ),
                         )

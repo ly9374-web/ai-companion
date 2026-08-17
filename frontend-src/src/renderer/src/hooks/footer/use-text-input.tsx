@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useWebSocket } from '@/context/websocket-context';
 import { useAiState } from '@/context/ai-state-context';
 import { useInterrupt } from '@/components/canvas/live2d';
@@ -11,10 +11,14 @@ import { getMissingChatApiKeyProvider } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
 
-export function useTextInput() {
+export type QuickStartTopic = 'english' | 'work' | 'relationships' | 'school';
+
+interface SendTextMessageOptions {
+  quickStartTopic?: QuickStartTopic;
+}
+
+export function useSendTextMessage() {
   const { t } = useTranslation();
-  const [inputText, setInputText] = useState('');
-  const [isComposing, setIsComposing] = useState(false);
   const wsContext = useWebSocket();
   const { aiState } = useAiState();
   const { interrupt } = useInterrupt();
@@ -22,12 +26,12 @@ export function useTextInput() {
   const { stopMic, autoStopMic } = useVAD();
   const { captureAllMedia } = useMediaCapture();
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputText(e.target.value);
-  };
-
-  const handleSend = async () => {
-    if (!inputText.trim() || !wsContext) return;
+  const sendTextMessage = useCallback(async (
+    displayText: string,
+    options: SendTextMessageOptions = {},
+  ): Promise<boolean> => {
+    const text = displayText.trim();
+    if (!text || !wsContext) return false;
     const missingApiKeyProvider = getMissingChatApiKeyProvider();
     if (missingApiKeyProvider) {
       toaster.create({
@@ -39,29 +43,56 @@ export function useTextInput() {
         type: 'warning',
         duration: 3000,
       });
-      return;
+      return false;
     }
     if (aiState === 'thinking-speaking') {
       interrupt();
     }
 
     const optionalContexts = optionalFeature.consumeForUserMessage();
-
     const images = await captureAllMedia();
 
-    appendHumanMessage(inputText.trim());
+    appendHumanMessage(text);
     wsContext.sendMessage({
       type: 'text-input',
-      text: inputText.trim(),
+      text,
       images,
       browser_time: formatBrowserTime(),
+      ...(options.quickStartTopic ? {
+        quick_start_topic: options.quickStartTopic,
+      } : {}),
       ...(optionalContexts ? {
         optional_contexts: optionalContexts,
       } : {}),
     });
 
     if (autoStopMic) stopMic();
-    setInputText('');
+    return true;
+  }, [
+    aiState,
+    appendHumanMessage,
+    autoStopMic,
+    captureAllMedia,
+    interrupt,
+    stopMic,
+    t,
+    wsContext,
+  ]);
+
+  return { sendTextMessage };
+}
+
+export function useTextInput() {
+  const [inputText, setInputText] = useState('');
+  const [isComposing, setIsComposing] = useState(false);
+  const { sendTextMessage } = useSendTextMessage();
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputText(e.target.value);
+  };
+
+  const handleSend = async () => {
+    if (await sendTextMessage(inputText)) setInputText('');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {

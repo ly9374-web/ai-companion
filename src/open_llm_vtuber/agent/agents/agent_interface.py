@@ -30,12 +30,17 @@ class AgentInterface(ABC):
         raise ValueError("Agent: No chat function set.")
 
     @abstractmethod
-    def handle_interrupt(self, heard_response: str) -> None:
+    def handle_interrupt(
+        self,
+        heard_response: str,
+        debug_mode: bool = False,
+    ) -> None:
         """
         Handle user interruption. This function will be called when the agent is interrupted.
 
         Args:
             heard_response: str - The part of response heard before interruption
+            debug_mode: Whether the interrupted turn is debug-only
         """
         logger.warning(
             """Agent: No interrupt handler set. The agent may not handle interruptions

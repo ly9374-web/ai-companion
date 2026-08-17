@@ -92,6 +92,7 @@ class BatchInput(BaseInput):
             - 'tts_preference_change_context': One-turn notice for user-initiated TTS changes
             - 'browser_time': Browser-local time supplied with the current input
             - 'frontend_activity_context': One-turn new-chat or requested-time notice
+            - 'debug_mode': Marks this request as excluded from normal context/memory
     """
 
     texts: List[TextData]

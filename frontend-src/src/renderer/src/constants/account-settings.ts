@@ -1,5 +1,6 @@
 const LAST_ACCOUNT_KEY = 'lastAccountName';
 const ACCOUNT_SESSION_ACTIVE_KEY = 'accountSessionActive';
+const ACCOUNT_SESSION_TOKEN_KEY = 'accountSessionToken';
 const LEGACY_BACKGROUND_KEY = 'backgroundUrl';
 
 const readStoredString = (key: string): string => {
@@ -28,12 +29,21 @@ export const isAccountSessionActive = (): boolean => {
   }
 };
 
-export const rememberAuthenticatedAccount = (account: string): void => {
+export const getAccountSessionToken = (): string => (
+  readStoredString(ACCOUNT_SESSION_TOKEN_KEY)
+);
+
+export const rememberAuthenticatedAccount = (
+  account: string,
+  sessionToken: string,
+): void => {
   localStorage.setItem(LAST_ACCOUNT_KEY, JSON.stringify(account));
+  localStorage.setItem(ACCOUNT_SESSION_TOKEN_KEY, JSON.stringify(sessionToken));
   localStorage.setItem(ACCOUNT_SESSION_ACTIVE_KEY, 'true');
 };
 
 export const rememberLoggedOut = (): void => {
+  localStorage.removeItem(ACCOUNT_SESSION_TOKEN_KEY);
   localStorage.setItem(ACCOUNT_SESSION_ACTIVE_KEY, 'false');
 };
 

@@ -10,6 +10,7 @@ from loguru import logger
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
 from ..optional_features import build_optional_request_context
+from ..conversation_starters import get_conversation_starter
 from .single_conversation import process_single_conversation
 from .conversation_utils import EMOJI_LIST
 from prompts import prompt_builder, prompt_loader
@@ -68,7 +69,17 @@ async def handle_conversation_trigger(
             )
         )
     elif msg_type == "text-input":
-        user_input = data.get("text", "")
+        quick_start_topic = data.get("quick_start_topic")
+        if quick_start_topic is not None:
+            if not context.conversation_starters_enabled:
+                raise ValueError("Conversation starters are not enabled for this account")
+            starter = get_conversation_starter(quick_start_topic)
+            if starter is None:
+                raise ValueError("Unsupported conversation starter")
+            user_input = starter["prompt"]
+            metadata = {"history_display_text": starter["label"]}
+        else:
+            user_input = data.get("text", "")
     else:  # mic-audio-end
         user_input = received_data_buffers[client_uid]
         received_data_buffers[client_uid] = np.array([])
@@ -78,9 +89,10 @@ async def handle_conversation_trigger(
         if isinstance(browser_time, str) and BROWSER_TIME_PATTERN.fullmatch(
             browser_time
         ):
-            metadata = {"browser_time": browser_time}
+            metadata = dict(metadata or {})
+            metadata["browser_time"] = browser_time
         else:
-            metadata = None
+            metadata = dict(metadata or {}) or None
             logger.warning("Missing or invalid browser time for {}", msg_type)
 
         optional_feature_context = build_optional_request_context(
@@ -120,7 +132,10 @@ async def handle_individual_interrupt(
             logger.info("🛑 Conversation task was successfully interrupted")
 
         try:
-            context.agent_engine.handle_interrupt(heard_response)
+            context.agent_engine.handle_interrupt(
+                heard_response,
+                debug_mode=context.debug_mode,
+            )
         except Exception as e:
             logger.error(f"Error handling interrupt: {e}")
 
@@ -132,6 +147,7 @@ async def handle_individual_interrupt(
                 content=heard_response,
                 name=context.character_config.character_name,
                 avatar=context.character_config.avatar,
+                debug_mode=context.debug_mode,
                 history_root=context.history_root,
             )
             store_message(
@@ -141,5 +157,6 @@ async def handle_individual_interrupt(
                 content=prompt_builder.load_runtime_prompt(
                     "interrupted_by_user"
                 ),
+                debug_mode=context.debug_mode,
                 history_root=context.history_root,
             )

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import hmac
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import threading
@@ -20,11 +24,16 @@ from .config_manager.utils import read_yaml
 CHAT_HISTORY_ROOT = Path("chat_history")
 DEFAULT_ACCOUNT_NAME = "Jason"
 MAX_ACCOUNT_NAME_LENGTH = 50
+MIN_PASSWORD_LENGTH = 3
+MAX_PASSWORD_LENGTH = 128
 _INVALID_ACCOUNT_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _ACCOUNT_LOCK = threading.RLock()
 _ACCOUNT_MARKER_NAME = ".account.json"
 _LAYOUT_MARKER_NAME = ".account-layout-v2.json"
 _MIGRATION_CONFLICT_DIR = ".migration-conflicts"
+_PASSWORD_ITERATIONS = 210_000
+_MAX_PERSISTENT_SESSIONS = 10
+_CONVERSATION_STARTERS_FEATURE = "conversation_starters_v1"
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -51,6 +60,57 @@ class InvalidAccountName(ValueError):
 
 class AccountAlreadyExists(ValueError):
     """Raised when registration would create a case-insensitive duplicate."""
+
+
+class InvalidPassword(ValueError):
+    """Raised when a new password does not meet the local account rules."""
+
+
+class AuthenticationFailed(ValueError):
+    """Raised when an account password or persistent session is invalid."""
+
+
+def normalize_password(value: object) -> str:
+    """Validate a password without altering any of its characters."""
+    if not isinstance(value, str):
+        raise InvalidPassword("密码无效")
+    if len(value) < MIN_PASSWORD_LENGTH:
+        raise InvalidPassword(f"密码至少需要 {MIN_PASSWORD_LENGTH} 位")
+    if len(value) > MAX_PASSWORD_LENGTH:
+        raise InvalidPassword(f"密码不能超过 {MAX_PASSWORD_LENGTH} 位")
+    return value
+
+
+def _password_record(password: str) -> dict[str, object]:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS
+    )
+    return {
+        "algorithm": "pbkdf2-sha256",
+        "iterations": _PASSWORD_ITERATIONS,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "hash": base64.b64encode(digest).decode("ascii"),
+    }
+
+
+def _password_matches(password: str, record: object) -> bool:
+    if not isinstance(record, dict) or record.get("algorithm") != "pbkdf2-sha256":
+        return False
+    try:
+        iterations = int(record["iterations"])
+        salt = base64.b64decode(str(record["salt"]), validate=True)
+        expected = base64.b64decode(str(record["hash"]), validate=True)
+    except (KeyError, TypeError, ValueError):
+        return False
+    actual = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, iterations
+    )
+    return hmac.compare_digest(actual, expected)
+
+
+def _session_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def normalize_account_name(value: object) -> str:
@@ -103,9 +163,8 @@ def get_character_conf_uids() -> list[str]:
     return conf_uids
 
 
-def _write_json_if_missing(path: Path, payload: dict[str, str]) -> None:
-    if path.exists():
-        return
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    """Atomically replace a small JSON metadata file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -121,6 +180,40 @@ def _write_json_if_missing(path: Path, payload: dict[str, str]) -> None:
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
+
+def _write_json_if_missing(path: Path, payload: dict[str, object]) -> None:
+    if path.exists():
+        return
+    _write_json(path, payload)
+
+
+def _read_account_marker(account_name: str) -> dict[str, object]:
+    marker_path = get_account_history_root(account_name) / _ACCOUNT_MARKER_NAME
+    with marker_path.open("r", encoding="utf-8") as marker_file:
+        payload = json.load(marker_file)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid account metadata")
+    return payload
+
+
+def _write_account_marker(account_name: str, payload: dict[str, object]) -> None:
+    marker_path = get_account_history_root(account_name) / _ACCOUNT_MARKER_NAME
+    _write_json(marker_path, payload)
+
+
+def has_conversation_starters(account_name: str) -> bool:
+    """Return the persisted opt-in assigned only during eligible registration."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        return False
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        features = marker.get("features")
+        return bool(
+            isinstance(features, dict)
+            and features.get(_CONVERSATION_STARTERS_FEATURE) is True
+        )
 
 
 def ensure_character_profile(account_name: str, conf_uid: str) -> Path:
@@ -275,9 +368,10 @@ def resolve_account_name(account_name: object) -> str | None:
     return None
 
 
-def register_account(account_name: object) -> str:
+def register_account(account_name: object, password: object) -> str:
     """Create a new account and all current role profiles."""
     requested = normalize_account_name(account_name)
+    validated_password = normalize_password(password)
     with _ACCOUNT_LOCK:
         _prepare_account_layout()
         requested_key = account_key(requested)
@@ -303,8 +397,104 @@ def register_account(account_name: object) -> str:
             account_dir.mkdir(parents=True, exist_ok=False)
             created_account_dir = True
             ensure_account_profile(requested)
+            marker = _read_account_marker(requested)
+            marker.update(
+                {
+                    "version": 2,
+                    "account": requested,
+                    "password": _password_record(validated_password),
+                    "sessions": [],
+                    "features": {
+                        _CONVERSATION_STARTERS_FEATURE: requested_key.endswith("cs")
+                    },
+                }
+            )
+            _write_account_marker(requested, marker)
         except Exception:
             if created_account_dir and account_dir.exists():
                 shutil.rmtree(account_dir)
             raise
     return requested
+
+
+def authenticate_account(account_name: object, password: object) -> str:
+    """Validate an account password and return its canonical display name."""
+    if not isinstance(password, str):
+        raise AuthenticationFailed("账号或密码错误")
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号或密码错误")
+
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        password_data = marker.get("password")
+        # The original local profile predates passwords. Give only the built-in
+        # Jason account its documented initial password during the migration.
+        if password_data is None and account_key(account) == account_key(DEFAULT_ACCOUNT_NAME):
+            password_data = _password_record("123")
+            marker.update({"version": 2, "password": password_data, "sessions": []})
+            _write_account_marker(account, marker)
+        if not _password_matches(password, password_data):
+            raise AuthenticationFailed("账号或密码错误")
+    return account
+
+
+def create_persistent_session(account_name: str) -> str:
+    """Issue a persistent opaque token while storing only its digest."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号或密码错误")
+    token = secrets.token_urlsafe(32)
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        sessions = marker.get("sessions")
+        if not isinstance(sessions, list):
+            sessions = []
+        valid_sessions = [value for value in sessions if isinstance(value, str)]
+        valid_sessions.append(_session_digest(token))
+        marker["sessions"] = valid_sessions[-_MAX_PERSISTENT_SESSIONS:]
+        marker["version"] = 2
+        _write_account_marker(account, marker)
+    return token
+
+
+def resolve_authenticated_session(account_name: object, token: object) -> str | None:
+    """Resolve an account only when its persistent session token is valid."""
+    if not isinstance(token, str) or not token or len(token) > 256:
+        return None
+    account = resolve_account_name(account_name)
+    if account is None:
+        return None
+    token_digest = _session_digest(token)
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        sessions = marker.get("sessions")
+        if not isinstance(sessions, list):
+            return None
+        if any(
+            isinstance(value, str) and hmac.compare_digest(value, token_digest)
+            for value in sessions
+        ):
+            return account
+    return None
+
+
+def revoke_persistent_session(account_name: object, token: object) -> None:
+    """Remove one persistent login token if it exists."""
+    if not isinstance(token, str) or not token:
+        return
+    account = resolve_account_name(account_name)
+    if account is None:
+        return
+    token_digest = _session_digest(token)
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        sessions = marker.get("sessions")
+        if not isinstance(sessions, list):
+            return
+        marker["sessions"] = [
+            value
+            for value in sessions
+            if not (isinstance(value, str) and hmac.compare_digest(value, token_digest))
+        ]
+        _write_account_marker(account, marker)

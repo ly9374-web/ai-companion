@@ -66,6 +66,15 @@ class AgentFactory:
                 system_prompt=system_prompt,
                 **summary_llm_config,
             )
+            reconcile_llm_config = dict(llm_config)
+            reconcile_llm_config["model"] = basic_memory_settings.get(
+                "long_term_reconcile_model", "deepseek-v4-pro"
+            )
+            reconcile_llm = StatelessLLMFactory.create_llm(
+                llm_provider=llm_provider,
+                system_prompt=system_prompt,
+                **reconcile_llm_config,
+            )
             rolling_summary_llm_config = dict(llm_config)
             rolling_summary_llm_config["model"] = basic_memory_settings.get(
                 "rolling_summary_model", "deepseek-v4-pro"
@@ -98,6 +107,7 @@ class AgentFactory:
                 llm=llm,
                 grok_llm=grok_llm,
                 summary_llm=summary_llm,
+                reconcile_llm=reconcile_llm,
                 rolling_summary_llm=rolling_summary_llm,
                 system=system_prompt,
                 live2d_model=live2d_model,

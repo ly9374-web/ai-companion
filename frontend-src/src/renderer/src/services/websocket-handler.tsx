@@ -247,11 +247,18 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         // No need to open mic here
         if (message.history_uid) {
           setCurrentHistoryUid(message.history_uid);
-          setMessages([]);
+          setMessages(message.messages || []);
+          const latestMessage = message.messages?.length
+            ? message.messages[message.messages.length - 1]
+            : null;
           const newHistory: HistoryInfo = {
             uid: message.history_uid,
-            latest_message: null,
-            timestamp: new Date().toISOString(),
+            latest_message: latestMessage ? {
+              content: latestMessage.content,
+              role: latestMessage.role,
+              timestamp: latestMessage.timestamp,
+            } : null,
+            timestamp: latestMessage?.timestamp || new Date().toISOString(),
           };
           setHistoryList((prev: HistoryInfo[]) => [newHistory, ...prev]);
           toaster.create({

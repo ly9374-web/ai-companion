@@ -135,11 +135,24 @@ def build_long_term_memory_summary_input(
     ).strip()
 
 
+def build_long_term_memory_reconcile_input(
+    reconciliation_input: dict[str, Any],
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.long_term_memory_reconcile.user_prompt",
+        reconciliation_input_json=json.dumps(
+            reconciliation_input, ensure_ascii=False
+        ),
+    ).strip()
+
+
 def build_rolling_context_summary_input(
     turns: list[dict[str, str]],
+    previous_summary: str = "",
 ) -> str:
     return prompt_loader.render_prompt(
         "summaries.rolling_context.user_prompt",
+        previous_summary_json=json.dumps(previous_summary, ensure_ascii=False),
         conversation_turns_json=json.dumps(turns, ensure_ascii=False),
     ).strip()
 

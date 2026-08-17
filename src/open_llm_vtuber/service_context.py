@@ -37,7 +37,11 @@ from .config_manager import (
 )
 from .config_manager.tts import QWEN_TTS_VOICE_LABELS
 from .summary_coordinator import SummaryCoordinator
-from .account_manager import ensure_character_profile, get_account_history_root
+from .account_manager import (
+    ensure_character_profile,
+    get_account_history_root,
+    has_conversation_starters,
+)
 from .long_term_memory_manager import LongTermMemoryManager
 from .long_term_relationship_manager import LongTermRelationshipManager
 from .short_term_relationship_manager import ShortTermRelationshipManager
@@ -94,6 +98,7 @@ class ServiceContext:
 
         self.history_uid: str = ""
         self.account_name: str = ""
+        self.conversation_starters_enabled = False
         self.history_root = Path("chat_history")
         self.send_text: Callable = None
         self.client_uid: str = None
@@ -127,6 +132,7 @@ class ServiceContext:
     def configure_account(self, account_name: str) -> None:
         """Scope every persistent conversation service to one local account."""
         self.account_name = account_name
+        self.conversation_starters_enabled = has_conversation_starters(account_name)
         self.history_root = get_account_history_root(account_name)
         ensure_character_profile(account_name, self.character_config.conf_uid)
         self.character_config.human_name = account_name
@@ -524,6 +530,7 @@ class ServiceContext:
             for attribute in (
                 "_deepseek_llm",
                 "_summary_llm",
+                "_reconcile_llm",
                 "_rolling_summary_llm",
             ):
                 llm = getattr(self.agent_engine, attribute, None)

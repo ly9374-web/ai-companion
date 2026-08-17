@@ -18,6 +18,9 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
     long_term_summary_model: str = Field(
         "deepseek-v4-pro", alias="long_term_summary_model"
     )
+    long_term_reconcile_model: str = Field(
+        "deepseek-v4-pro", alias="long_term_reconcile_model"
+    )
     rolling_summary_model: str = Field(
         "deepseek-v4-pro", alias="rolling_summary_model"
     )
@@ -41,6 +44,10 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
         "long_term_summary_model": Description(
             en="DeepSeek model used for long-term memory and relationship summaries",
             zh="用于长期记忆和长期关系总结的 DeepSeek 模型",
+        ),
+        "long_term_reconcile_model": Description(
+            en="DeepSeek model used to reconcile new and existing long-term memories",
+            zh="用于长期记忆去重、状态更新与冲突归类的 DeepSeek 模型",
         ),
         "rolling_summary_model": Description(
             en="DeepSeek model used for per-chat rolling summaries",

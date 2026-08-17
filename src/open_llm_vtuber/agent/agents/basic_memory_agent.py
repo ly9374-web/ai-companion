@@ -51,6 +51,7 @@ class BasicMemoryAgent(AgentInterface):
         live2d_model,
         grok_llm: Optional[StatelessLLMInterface] = None,
         summary_llm: Optional[StatelessLLMInterface] = None,
+        reconcile_llm: Optional[StatelessLLMInterface] = None,
         rolling_summary_llm: Optional[StatelessLLMInterface] = None,
         tts_preprocessor_config: TTSPreprocessorConfig = None,
         faster_first_response: bool = True,
@@ -101,6 +102,7 @@ class BasicMemoryAgent(AgentInterface):
         self._grok_enabled = False
         self._set_llm(llm)
         self._summary_llm = summary_llm or llm
+        self._reconcile_llm = reconcile_llm or self._summary_llm
         self._rolling_summary_llm = rolling_summary_llm or self._summary_llm
         self.set_system(system if system else self._system)
 
@@ -167,6 +169,7 @@ class BasicMemoryAgent(AgentInterface):
     def _get_context_memory(
         self,
         superseded_context_keys: set[str] | None = None,
+        include_debug: bool = False,
     ) -> List[Dict[str, Any]]:
         """Return history after both configured role counts are reached.
 
@@ -176,13 +179,18 @@ class BasicMemoryAgent(AgentInterface):
         retained position, and a fresh snapshot on the current request replaces
         the historical snapshot of the same type.
         """
+        eligible_memory = [
+            message
+            for message in self._memory
+            if include_debug or not message.get("debug_mode")
+        ]
         max_history_turns = getattr(self, "_max_history_turns", 8)
         user_turns = 0
         assistant_turns = 0
         start_index = 0
 
-        for index in range(len(self._memory) - 1, -1, -1):
-            role = self._memory[index].get("role")
+        for index in range(len(eligible_memory) - 1, -1, -1):
+            role = eligible_memory[index].get("role")
             if role == "user":
                 user_turns += 1
             elif role == "assistant":
@@ -203,11 +211,14 @@ class BasicMemoryAgent(AgentInterface):
         ):
             start_index = 0
 
-        context_memory = [message.copy() for message in self._memory[start_index:]]
+        context_memory = [
+            message.copy() for message in eligible_memory[start_index:]
+        ]
         superseded_context_keys = superseded_context_keys or set()
         latest_context_positions: Dict[str, int] = {}
 
         for index, message in enumerate(context_memory):
+            message.pop("debug_mode", None)
             context_injections = message.get("context_injections")
             if not isinstance(context_injections, dict):
                 continue
@@ -248,6 +259,7 @@ class BasicMemoryAgent(AgentInterface):
         display_text: DisplayText | None = None,
         skip_memory: bool = False,
         context_injections: Dict[str, str] | None = None,
+        debug_mode: bool = False,
     ):
         """Add message to memory."""
         if skip_memory:
@@ -286,6 +298,8 @@ class BasicMemoryAgent(AgentInterface):
         }
         if normalized_context_injections:
             message_data["context_injections"] = normalized_context_injections
+        if debug_mode:
+            message_data["debug_mode"] = True
 
         if display_text:
             if display_text.name:
@@ -299,6 +313,8 @@ class BasicMemoryAgent(AgentInterface):
             and self._memory[-1]["content"] == text_content
             and self._memory[-1].get("context_injections")
             == message_data.get("context_injections")
+            and self._memory[-1].get("debug_mode")
+            == message_data.get("debug_mode")
         ):
             return
 
@@ -312,7 +328,10 @@ class BasicMemoryAgent(AgentInterface):
     ) -> None:
         """Load memory from chat history."""
         messages = get_history(conf_uid, history_uid, history_root)
+        self.set_memory_from_messages(messages)
 
+    def set_memory_from_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """Load model memory from persisted or model-only history messages."""
         self._memory = []
         for msg in messages:
             role = {
@@ -344,12 +363,18 @@ class BasicMemoryAgent(AgentInterface):
                         message_data["context_injections"] = (
                             normalized_context_injections
                         )
+                if msg.get("debug_mode"):
+                    message_data["debug_mode"] = True
                 self._memory.append(message_data)
             else:
                 logger.warning(f"Skipping invalid message from history: {msg}")
         logger.info(f"Loaded {len(self._memory)} messages from history.")
 
-    def handle_interrupt(self, heard_response: str) -> None:
+    def handle_interrupt(
+        self,
+        heard_response: str,
+        debug_mode: bool = False,
+    ) -> None:
         """Handle user interruption."""
         if self._interrupt_handled:
             return
@@ -361,12 +386,15 @@ class BasicMemoryAgent(AgentInterface):
                 self._memory[-1]["content"] = heard_response + "..."
             else:
                 self._memory[-1]["content"] = heard_response + "..."
+            if debug_mode:
+                self._memory[-1]["debug_mode"] = True
         else:
             if heard_response:
                 self._memory.append(
                     {
                         "role": "assistant",
                         "content": heard_response + "...",
+                        **({"debug_mode": True} if debug_mode else {}),
                     }
                 )
 
@@ -377,6 +405,7 @@ class BasicMemoryAgent(AgentInterface):
                 "content": prompt_builder.load_runtime_prompt(
                     "interrupted_by_user"
                 ),
+                **({"debug_mode": True} if debug_mode else {}),
             }
         )
         logger.info(f"Handled interrupt with role '{interrupt_role}'.")
@@ -446,6 +475,9 @@ class BasicMemoryAgent(AgentInterface):
             rolling_summary_context = input_data.metadata.get(
                 "rolling_summary_context", ""
             )
+        debug_mode = bool(
+            input_data.metadata and input_data.metadata.get("debug_mode")
+        )
 
         # RAG memory is request-scoped. Relationship snapshots retain their
         # existing history behavior, while retrieved memory never enters it.
@@ -458,8 +490,12 @@ class BasicMemoryAgent(AgentInterface):
             for key, value in context_injections.items()
             if isinstance(value, str) and value.strip()
         }
+        superseded_context_keys = set(active_context_injections)
+        if debug_mode:
+            superseded_context_keys.update(self._CONTEXT_INJECTION_KEYS)
         messages = self._get_context_memory(
-            superseded_context_keys=set(active_context_injections)
+            superseded_context_keys=superseded_context_keys,
+            include_debug=debug_mode,
         )
 
         request_text = prompt_builder.build_user_request(
@@ -516,6 +552,7 @@ class BasicMemoryAgent(AgentInterface):
                     ),
                     "user",
                     context_injections=active_context_injections,
+                    debug_mode=debug_mode,
                 )
         else:
             logger.warning("No content generated for user message.")
@@ -548,13 +585,40 @@ class BasicMemoryAgent(AgentInterface):
         raw_output = "".join(chunks).strip()
         return raw_output
 
+    async def reconcile_long_term_memory(
+        self,
+        reconciliation_input: Dict[str, Any],
+    ) -> str:
+        """Classify new memories against retrieved existing memories."""
+        system_prompt = prompt_builder.load_summary_prompt(
+            "long_term_memory_reconcile"
+        )
+        user_prompt = prompt_builder.build_long_term_memory_reconcile_input(
+            reconciliation_input
+        )
+        messages = [{"role": "user", "content": user_prompt}]
+
+        chunks: List[str] = []
+        async for event in self._reconcile_llm.chat_completion(
+            messages, system_prompt
+        ):
+            if isinstance(event, str):
+                chunks.append(event)
+            elif isinstance(event, dict) and event.get("type") == "text_delta":
+                chunks.append(event.get("text", ""))
+        return "".join(chunks).strip()
+
     async def summarize_rolling_context(
         self,
         turns: List[Dict[str, str]],
+        previous_summary: str = "",
     ) -> str:
-        """Summarize the portion of this chat outside the direct context window."""
+        """Merge one new x-turn batch into this chat's rolling summary."""
         system_prompt = prompt_builder.load_summary_prompt("rolling_context")
-        summary_input = prompt_builder.build_rolling_context_summary_input(turns)
+        summary_input = prompt_builder.build_rolling_context_summary_input(
+            turns,
+            previous_summary,
+        )
         messages = [{"role": "user", "content": summary_input}]
 
         chunks: List[str] = []
@@ -640,6 +704,7 @@ class BasicMemoryAgent(AgentInterface):
         tools: List[Dict[str, Any]],
         turn_id: int,
         llm: StatelessLLMInterface,
+        debug_mode: bool = False,
     ) -> AsyncIterator[Union[str, Dict[str, Any]]]:
         """Handle OpenAI interaction with tool support."""
         messages = initial_messages.copy()
@@ -733,7 +798,9 @@ class BasicMemoryAgent(AgentInterface):
 
             if detected_prompt_json:
                 logger.info("Processing tools detected via prompt mode JSON.")
-                self._add_message(current_turn_text, "assistant")
+                self._add_message(
+                    current_turn_text, "assistant", debug_mode=debug_mode
+                )
 
                 parsed_tools = self._tool_executor.process_tool_from_prompt_json(
                     detected_prompt_json
@@ -787,7 +854,9 @@ class BasicMemoryAgent(AgentInterface):
             elif pending_tool_calls and assistant_message_for_api:
                 messages.append(assistant_message_for_api)
                 if current_turn_text:
-                    self._add_message(current_turn_text, "assistant")
+                    self._add_message(
+                        current_turn_text, "assistant", debug_mode=debug_mode
+                    )
 
                 tool_results_for_llm = []
                 if not self._tool_executor:
@@ -822,7 +891,9 @@ class BasicMemoryAgent(AgentInterface):
 
             else:
                 if current_turn_text:
-                    self._add_message(current_turn_text, "assistant")
+                    self._add_message(
+                        current_turn_text, "assistant", debug_mode=debug_mode
+                    )
                 return
 
     def _chat_function_factory(
@@ -849,6 +920,9 @@ class BasicMemoryAgent(AgentInterface):
             turn_id = self._turn_sequence
 
             messages = self._to_messages(input_data)
+            debug_mode = bool(
+                input_data.metadata and input_data.metadata.get("debug_mode")
+            )
             tools = None
             tool_mode = None
             llm_supports_native_tools = False
@@ -876,7 +950,11 @@ class BasicMemoryAgent(AgentInterface):
                     f"Starting OpenAI tool interaction loop with {len(tools)} tools."
                 )
                 async for output in self._openai_tool_interaction_loop(
-                    messages, tools if tools else [], turn_id, active_llm
+                    messages,
+                    tools if tools else [],
+                    turn_id,
+                    active_llm,
+                    debug_mode,
                 ):
                     yield output
                 return
@@ -895,7 +973,11 @@ class BasicMemoryAgent(AgentInterface):
                         yield text_chunk
                         complete_response += text_chunk
                 if complete_response:
-                    self._add_message(complete_response, "assistant")
+                    self._add_message(
+                        complete_response,
+                        "assistant",
+                        debug_mode=debug_mode,
+                    )
 
         return chat_with_memory
 

@@ -1,4 +1,4 @@
-"""Latest per-history summary of chat outside the direct context window."""
+"""Recursive per-history summary updated after each x normal turns."""
 
 from __future__ import annotations
 
@@ -11,11 +11,16 @@ from typing import Awaitable, Callable
 
 from loguru import logger
 
-from .chat_history_manager import get_metadata, update_metadate
+from .chat_history_manager import (
+    extract_normal_turns,
+    get_history,
+    get_metadata,
+    update_metadate,
+)
 
 
 ROLLING_SUMMARY_METADATA_KEY = "rolling_summary"
-RollingSummaryCallback = Callable[[list[dict[str, str]]], Awaitable[str]]
+RollingSummaryCallback = Callable[[list[dict[str, str]], str], Awaitable[str]]
 
 
 class RollingSummaryManager:
@@ -80,36 +85,10 @@ class RollingSummaryManager:
             raise ValueError("Rolling summary exceeds 100 characters")
         return summary
 
-    @staticmethod
-    def select_turns(
-        messages: list[dict],
-        context_turns: int,
-    ) -> tuple[list[dict[str, str]], int, int]:
-        turns: list[dict[str, str]] = []
-        pending_user: str | None = None
-        for message in messages:
-            role = message.get("role")
-            content = message.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            if role == "human":
-                pending_user = content.strip()
-            elif role == "ai" and pending_user is not None:
-                turns.append({"user": pending_user, "assistant": content.strip()})
-                pending_user = None
-
-        summary_end = len(turns) - max(1, int(context_turns))
-        if summary_end < 1:
-            return [], 0, 0
-        start_index = max(0, summary_end - 30)
-        return turns[start_index:summary_end], start_index + 1, summary_end
-
     def read_injection(
         self,
         conf_uid: str,
         history_uid: str,
-        completed_turns: int,
-        context_turns: int,
     ) -> str:
         state = self._read_metadata(conf_uid, history_uid).get(
             ROLLING_SUMMARY_METADATA_KEY, {}
@@ -117,97 +96,87 @@ class RollingSummaryManager:
         if not isinstance(state, dict):
             return ""
         text = state.get("text")
-        end_turn = state.get("end_turn")
         if not isinstance(text, str) or not text.strip():
-            return ""
-        if isinstance(end_turn, bool) or not isinstance(end_turn, int):
-            return ""
-        earliest_direct_turn = max(1, completed_turns - context_turns + 1)
-        if end_turn >= earliest_direct_turn:
             return ""
         return text.strip()
 
-    async def generate_and_store(
+    @staticmethod
+    def _turn_payloads(messages: list[dict]) -> list[dict[str, str]]:
+        return [
+            {
+                "user": str(turn["user"].get("content", "")).strip(),
+                "assistant": str(turn["assistant"].get("content", "")).strip(),
+            }
+            for turn in extract_normal_turns(messages)
+        ]
+
+    async def generate_next_batch(
         self,
         conf_uid: str,
         history_uid: str,
-        turns: list[dict[str, str]],
-        start_turn: int,
-        end_turn: int,
-        generated_at_turn: int,
+        batch_size: int,
         summarize: RollingSummaryCallback,
         force: bool = False,
     ) -> bool:
-        if not turns:
+        if batch_size < 1:
             return False
         async with self._get_history_lock(conf_uid, history_uid):
-            return await self._generate_and_store_unlocked(
+            return await self._generate_next_batch_unlocked(
                 conf_uid,
                 history_uid,
-                turns,
-                start_turn,
-                end_turn,
-                generated_at_turn,
+                batch_size,
                 summarize,
                 force,
             )
 
-    async def _generate_and_store_unlocked(
+    async def _generate_next_batch_unlocked(
         self,
         conf_uid: str,
         history_uid: str,
-        turns: list[dict[str, str]],
-        start_turn: int,
-        end_turn: int,
-        generated_at_turn: int,
+        batch_size: int,
         summarize: RollingSummaryCallback,
         force: bool,
     ) -> bool:
         existing_state = self._read_metadata(conf_uid, history_uid).get(
             ROLLING_SUMMARY_METADATA_KEY, {}
         )
-        existing_turn = (
-            existing_state.get("generated_at_turn", 0)
-            if isinstance(existing_state, dict)
-            else 0
+        if not isinstance(existing_state, dict):
+            existing_state = {}
+        summarized_turns = existing_state.get(
+            "summarized_normal_turns",
+            existing_state.get("end_turn", 0),
         )
-        if (
-            not force
-            and not isinstance(existing_turn, bool)
-            and isinstance(existing_turn, int)
-            and existing_turn >= generated_at_turn
+        if isinstance(summarized_turns, bool) or not isinstance(
+            summarized_turns, int
         ):
+            summarized_turns = 0
+        summarized_turns = max(0, summarized_turns)
+        all_turns = self._turn_payloads(
+            get_history(conf_uid, history_uid, self.history_root)
+        )
+        pending_count = len(all_turns) - summarized_turns
+        if pending_count <= 0 or (not force and pending_count < batch_size):
             return False
+        take_count = min(batch_size, pending_count) if force else batch_size
+        start_turn = summarized_turns + 1
+        end_turn = summarized_turns + take_count
+        turns = all_turns[summarized_turns:end_turn]
+        previous_summary = existing_state.get("text", "")
+        if not isinstance(previous_summary, str):
+            previous_summary = ""
 
         summary: str | None = None
         last_error: Exception | None = None
         for _ in range(3):
             try:
-                summary = self.parse_summary(await summarize(turns))
+                summary = self.parse_summary(
+                    await summarize(turns, previous_summary.strip())
+                )
                 break
             except Exception as exc:
                 last_error = exc
         if summary is None:
             logger.error("Rolling summary failed after 3 attempts: {}", last_error)
-            return False
-        existing_state = self._read_metadata(conf_uid, history_uid).get(
-            ROLLING_SUMMARY_METADATA_KEY, {}
-        )
-        existing_turn = (
-            existing_state.get("generated_at_turn", 0)
-            if isinstance(existing_state, dict)
-            else 0
-        )
-        if (
-            not force
-            and not isinstance(existing_turn, bool)
-            and isinstance(existing_turn, int)
-            and existing_turn > generated_at_turn
-        ):
-            logger.info(
-                "Discarding stale rolling summary for completed turn {}",
-                generated_at_turn,
-            )
             return False
         saved = self._write_metadata(
             conf_uid,
@@ -217,7 +186,9 @@ class RollingSummaryManager:
                     "text": summary,
                     "start_turn": start_turn,
                     "end_turn": end_turn,
-                    "generated_at_turn": generated_at_turn,
+                    "generated_at_turn": end_turn,
+                    "summarized_normal_turns": end_turn,
+                    "batch_size": batch_size,
                 }
             },
         )
@@ -226,9 +197,27 @@ class RollingSummaryManager:
                 "Rolling summary saved for turns {}-{} at completed turn {}",
                 start_turn,
                 end_turn,
-                generated_at_turn,
+                end_turn,
             )
         return saved
+
+    async def generate_ready_batches(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        batch_size: int,
+        summarize: RollingSummaryCallback,
+    ) -> bool:
+        """Serially consume every complete x-turn batch currently available."""
+        generated = False
+        while await self.generate_next_batch(
+            conf_uid,
+            history_uid,
+            batch_size,
+            summarize,
+        ):
+            generated = True
+        return generated
 
 
 rolling_summary_manager = RollingSummaryManager()

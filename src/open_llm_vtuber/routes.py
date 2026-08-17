@@ -19,35 +19,57 @@ from .optional_features import (
 )
 from .account_manager import (
     AccountAlreadyExists,
+    AuthenticationFailed,
     InvalidAccountName,
+    InvalidPassword,
+    authenticate_account,
+    create_persistent_session,
+    has_conversation_starters,
     register_account,
-    resolve_account_name,
+    resolve_authenticated_session,
+    revoke_persistent_session,
 )
 
 
+def _account_features(account: str) -> dict[str, bool]:
+    return {"conversationStarters": has_conversation_starters(account)}
+
+
 def init_account_routes() -> APIRouter:
-    """Create the local, passwordless account profile endpoints."""
+    """Create local password authentication and persistent-session endpoints."""
     router = APIRouter()
 
     @router.post("/api/accounts/login")
     async def login_account(payload: dict):
         try:
-            account = resolve_account_name(payload.get("account"))
+            account = authenticate_account(
+                payload.get("account"), payload.get("password")
+            )
+            session_token = create_persistent_session(account)
+        except AuthenticationFailed as exc:
+            return JSONResponse({"error": str(exc)}, status_code=401)
         except Exception as exc:
             logger.exception("Failed to read account profile: {}", exc)
             return JSONResponse(
                 {"error": "账号数据读取失败"},
                 status_code=500,
             )
-        if account is None:
-            return JSONResponse({"error": "账号错误"}, status_code=404)
-        return JSONResponse({"account": account})
+        return JSONResponse(
+            {
+                "account": account,
+                "sessionToken": session_token,
+                "features": _account_features(account),
+            }
+        )
 
     @router.post("/api/accounts/register")
     async def create_account(payload: dict):
         try:
-            account = register_account(payload.get("account"))
+            account = register_account(payload.get("account"), payload.get("password"))
+            session_token = create_persistent_session(account)
         except InvalidAccountName as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except InvalidPassword as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except AccountAlreadyExists as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
@@ -57,7 +79,40 @@ def init_account_routes() -> APIRouter:
                 {"error": "账号数据创建失败"},
                 status_code=500,
             )
-        return JSONResponse({"account": account}, status_code=201)
+        return JSONResponse(
+            {
+                "account": account,
+                "sessionToken": session_token,
+                "features": _account_features(account),
+            },
+            status_code=201,
+        )
+
+    @router.post("/api/accounts/session")
+    async def restore_account_session(payload: dict):
+        try:
+            account = resolve_authenticated_session(
+                payload.get("account"), payload.get("sessionToken")
+            )
+        except Exception as exc:
+            logger.exception("Failed to restore account session: {}", exc)
+            return JSONResponse({"error": "账号数据读取失败"}, status_code=500)
+        if account is None:
+            return JSONResponse({"error": "登录已失效"}, status_code=401)
+        return JSONResponse(
+            {"account": account, "features": _account_features(account)}
+        )
+
+    @router.post("/api/accounts/logout")
+    async def logout_account(payload: dict):
+        try:
+            revoke_persistent_session(
+                payload.get("account"), payload.get("sessionToken")
+            )
+        except Exception as exc:
+            logger.exception("Failed to revoke account session: {}", exc)
+            return JSONResponse({"error": "退出登录失败"}, status_code=500)
+        return Response(status_code=204)
 
     return router
 
@@ -80,7 +135,10 @@ def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for client connections"""
         try:
-            account = resolve_account_name(websocket.query_params.get("account"))
+            account = resolve_authenticated_session(
+                websocket.query_params.get("account"),
+                websocket.query_params.get("session"),
+            )
         except Exception as exc:
             logger.exception("Failed to authenticate WebSocket account: {}", exc)
             await websocket.close(code=1011, reason="Account storage unavailable")
@@ -117,10 +175,11 @@ def init_proxy_route(server_url: str) -> APIRouter:
     router = APIRouter()
     proxy_handlers: dict[str, ProxyHandler] = {}
 
-    def account_server_url(account: str) -> str:
+    def account_server_url(account: str, session_token: str) -> str:
         parsed = urlsplit(server_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query["account"] = account
+        query["session"] = session_token
         return urlunsplit(
             (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
         )
@@ -128,8 +187,11 @@ def init_proxy_route(server_url: str) -> APIRouter:
     @router.websocket("/proxy-ws")
     async def proxy_endpoint(websocket: WebSocket):
         """WebSocket endpoint for proxy connections"""
+        session_token = websocket.query_params.get("session")
         try:
-            account = resolve_account_name(websocket.query_params.get("account"))
+            account = resolve_authenticated_session(
+                websocket.query_params.get("account"), session_token
+            )
         except Exception as exc:
             logger.exception("Failed to authenticate proxy account: {}", exc)
             await websocket.close(code=1011, reason="Account storage unavailable")
@@ -140,7 +202,7 @@ def init_proxy_route(server_url: str) -> APIRouter:
 
         proxy_handler = proxy_handlers.get(account)
         if proxy_handler is None:
-            proxy_handler = ProxyHandler(account_server_url(account))
+            proxy_handler = ProxyHandler(account_server_url(account, session_token))
             proxy_handlers[account] = proxy_handler
         try:
             await proxy_handler.handle_client_connection(websocket)
