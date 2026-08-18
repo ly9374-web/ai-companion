@@ -80,6 +80,7 @@
     "key": {
       "deepseek": "DeepSeek Key",
       "deepseekPlaceholder": "Enter DeepSeek Key",
+      "deepseekModel": "DeepSeek Model",
       "grok": "Grok Key",
       "grokPlaceholder": "Enter xAI Grok Key",
       "grokEnabled": "Use Grok for Chat",

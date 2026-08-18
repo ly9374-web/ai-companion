@@ -1,4 +1,5 @@
 /* eslint-disable */
+import { useState } from 'react'
 import { Tabs } from '@chakra-ui/react'
 import { FiMonitor, FiGlobe } from 'react-icons/fi'
 import { useTranslation } from 'react-i18next'
@@ -14,10 +15,13 @@ import {
 function BottomTab(): JSX.Element {
   const { t } = useTranslation();
   const optionalFeatureAvailable = useOptionalFeatureAvailability();
-  
+  const [value, setValue] = useState<string | null>(null);
+  const defaultValue = optionalFeatureAvailable ? "optional-feature" : "screen";
+
   return (
-    <Tabs.Root 
-      defaultValue={optionalFeatureAvailable ? "optional-feature" : "screen"}
+    <Tabs.Root
+      value={value ?? defaultValue}
+      onValueChange={(details) => setValue(details.value)}
       variant="plain"
       {...sidebarStyles.bottomTab.container}
     >

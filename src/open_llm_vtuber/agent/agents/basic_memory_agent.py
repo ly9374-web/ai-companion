@@ -142,6 +142,15 @@ class BasicMemoryAgent(AgentInterface):
         self._set_llm(self._grok_llm if enabled else self._deepseek_llm)
         logger.info("Interactive chat model switched to {}", "Grok" if enabled else "DeepSeek")
 
+    def set_deepseek_model(self, model: str) -> None:
+        """Switch the interactive DeepSeek chat model (e.g. pro/flash) at runtime."""
+        if self._deepseek_llm is None:
+            raise ValueError("DeepSeek is not configured")
+        if not hasattr(self._deepseek_llm, "set_model"):
+            raise ValueError("DeepSeek LLM does not support runtime model switching")
+        self._deepseek_llm.set_model(model)
+        logger.info("Interactive DeepSeek model switched to {}", model)
+
     def set_system(self, system: str):
         """Set the system prompt."""
         logger.debug(f"Memory Agent: Setting system prompt: '''{system}'''")

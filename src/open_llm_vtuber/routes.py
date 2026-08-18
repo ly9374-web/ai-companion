@@ -13,8 +13,8 @@ from .service_context import ServiceContext
 from .websocket_handler import WebSocketHandler
 from .proxy_handler import ProxyHandler
 from .optional_features import (
-    EXPRESSION_FEATURE_DIR,
     get_optional_feature,
+    get_expression_feature_dir,
     get_expression_manifest,
 )
 from .account_manager import (
@@ -233,8 +233,8 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
     router = APIRouter()
 
     @router.get("/optional-features/expression/manifest")
-    async def get_optional_expression_manifest():
-        manifest = get_expression_manifest()
+    async def get_optional_expression_manifest(dir: str | None = None):
+        manifest = get_expression_manifest(dir)
         if manifest is None:
             return JSONResponse({"available": False})
 
@@ -242,15 +242,19 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
         if not isinstance(version, (str, int)):
             version = 1
         entry = manifest["frontend_entry"]
+        query_params = {"v": version}
+        if dir:
+            query_params["dir"] = dir
+        query = f"?{urlencode(query_params)}"
         emotion_urls = {
-            emotion: f"/optional-features/expression/files/{filename}?v={version}"
+            emotion: f"/optional-features/expression/files/{filename}{query}"
             for emotion, filename in manifest["emotions"].items()
         }
         return JSONResponse(
             {
                 "available": True,
                 "frontend_entry": (
-                    f"/optional-features/expression/files/{entry}?v={version}"
+                    f"/optional-features/expression/files/{entry}{query}"
                 ),
                 "config": {
                     "default_emotion": manifest.get("default_emotion", "中性"),
@@ -261,17 +265,18 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
         )
 
     @router.get("/optional-features/expression/files/{relative_path:path}")
-    async def get_optional_expression_file(relative_path: str):
-        manifest = get_expression_manifest()
+    async def get_optional_expression_file(relative_path: str, dir: str | None = None):
+        feature_dir = get_expression_feature_dir(dir)
+        manifest = get_expression_manifest(dir)
         if manifest is None:
             return Response(status_code=404)
 
         allowed_files = {manifest["frontend_entry"], *manifest["emotions"].values()}
         if relative_path not in allowed_files:
             return Response(status_code=404)
-        requested_path = (EXPRESSION_FEATURE_DIR / relative_path).resolve()
+        requested_path = (feature_dir / relative_path).resolve()
         if (
-            EXPRESSION_FEATURE_DIR.resolve() not in requested_path.parents
+            feature_dir.resolve() not in requested_path.parents
             or not requested_path.is_file()
         ):
             return Response(status_code=404)

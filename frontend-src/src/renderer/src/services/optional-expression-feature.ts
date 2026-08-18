@@ -26,6 +26,8 @@ class OptionalExpressionFeatureBridge {
 
   private loadPromise: Promise<void> | null = null;
 
+  private expressionDir: string | null = null;
+
   private interactionOptions: ExpressionInteractionOptions = {
     modelUrl: '',
     pointerInteractive: false,
@@ -45,10 +47,11 @@ class OptionalExpressionFeatureBridge {
     this.loadPromise = (async () => {
       try {
         const baseUrl = this.getBaseUrl();
-        const response = await fetch(
-          new URL('/optional-features/expression/manifest', baseUrl),
-          { cache: 'no-store' },
-        );
+        const manifestUrl = new URL('/optional-features/expression/manifest', baseUrl);
+        if (this.expressionDir) {
+          manifestUrl.searchParams.set('dir', this.expressionDir);
+        }
+        const response = await fetch(manifestUrl, { cache: 'no-store' });
         if (!response.ok) return;
 
         const manifest = await response.json() as ExpressionManifest;
@@ -91,6 +94,20 @@ class OptionalExpressionFeatureBridge {
   configureInteraction(options: ExpressionInteractionOptions) {
     this.interactionOptions = options;
     this.runtime?.configureInteraction?.(options);
+  }
+
+  /**
+   * Reload the expression feature for the active character. Called after a
+   * character switch so each persona uses its own expression image set.
+   */
+  reload(expressionDir?: string | null) {
+    if (expressionDir !== undefined) {
+      this.expressionDir = expressionDir || null;
+    }
+    this.runtime?.destroy();
+    this.runtime = null;
+    this.loadPromise = null;
+    void this.ensureLoaded();
   }
 }
 

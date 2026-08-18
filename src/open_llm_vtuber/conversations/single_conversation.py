@@ -205,6 +205,7 @@ async def process_single_conversation(
             "optional_feature_context", ""
         )
         history_display_text = request_metadata.pop("history_display_text", "")
+        is_quick_start = bool(request_metadata.pop("quick_start", False))
         is_first_turn = False
         completed_context_turns = 0
         if context.history_uid and not skip_history:
@@ -225,7 +226,12 @@ async def process_single_conversation(
         next_turn_number = completed_context_turns + 1
         relationship_injection_interval = context.max_history_turns + 1
         should_inject_relationships = False
-        if context.history_uid and not skip_history and not is_debug_turn:
+        if (
+            context.history_uid
+            and not skip_history
+            and not is_debug_turn
+            and not context.isolated_conversation_context
+        ):
             _, should_inject_relationships = reserve_interval_event(
                 context.character_config.conf_uid,
                 RELATIONSHIP_INJECTION_STATE_KEY,
@@ -291,34 +297,43 @@ async def process_single_conversation(
                 request_metadata["rolling_summary_context"] = (
                     prompt_builder.build_rolling_summary_injection(rolling_summary)
                 )
-            long_term_memory_context = (
-                await context.long_term_memory_manager.retrieve_injection(
-                    conf_uid=context.character_config.conf_uid,
-                    query=input_text,
-                    top_k=context.rag_top_k,
-                    threshold=context.rag_threshold,
-                    hybrid_weight=context.rag_hybrid_weight,
-                )
-            )
-            if long_term_memory_context:
-                request_metadata["long_term_memory_context"] = (
-                    long_term_memory_context
-                )
-            if should_inject_relationships:
-                request_metadata["long_term_relationship_context"] = (
-                    await context.long_term_relationship_manager.read_injection(
-                        context.character_config.conf_uid
+            if not context.isolated_conversation_context:
+                long_term_memory_context = (
+                    await context.long_term_memory_manager.retrieve_injection(
+                        conf_uid=context.character_config.conf_uid,
+                        query=input_text,
+                        top_k=context.rag_top_k,
+                        threshold=context.rag_threshold,
+                        hybrid_weight=context.rag_hybrid_weight,
                     )
                 )
-                request_metadata["short_term_relationship_context"] = (
-                    await context.short_term_relationship_manager.read_injection(
-                        context.character_config.conf_uid
+                if long_term_memory_context:
+                    request_metadata["long_term_memory_context"] = (
+                        long_term_memory_context
                     )
-                )
+                if should_inject_relationships:
+                    request_metadata["long_term_relationship_context"] = (
+                        await context.long_term_relationship_manager.read_injection(
+                            context.character_config.conf_uid
+                        )
+                    )
+                    request_metadata["short_term_relationship_context"] = (
+                        await context.short_term_relationship_manager.read_injection(
+                            context.character_config.conf_uid
+                        )
+                    )
+
+        # In English mode, steer every subsequent user prompt to expect an
+        # English reply. The starter itself already carries its own instruction,
+        # so it is left untouched, and the suffix is only added to the LLM
+        # prompt (not to the stored history or memory).
+        prompt_text = input_text
+        if context.english_mode and not is_quick_start and input_text.strip():
+            prompt_text = f"{input_text}\n此次回复语言为：英文"
 
         # Create batch input
         batch_input = create_batch_input(
-            input_text=input_text,
+            input_text=prompt_text,
             images=images,
             from_name=context.character_config.human_name,
             metadata=request_metadata or None,
@@ -481,7 +496,13 @@ async def process_single_conversation(
                 reconcile_memory = getattr(
                     context.agent_engine, "reconcile_long_term_memory", None
                 )
-                if summarize is None or reconcile_memory is None:
+                if context.isolated_conversation_context:
+                    logger.debug(
+                        "Skipping cross-conversation memory and relationship updates "
+                        "for isolated account {}",
+                        context.account_name,
+                    )
+                elif summarize is None or reconcile_memory is None:
                     logger.error(
                         "The active agent does not support two-stage long-term memory summaries"
                     )
@@ -519,7 +540,9 @@ async def process_single_conversation(
                     "summarize_short_term_relationship",
                     None,
                 )
-                if summarize_short_relationship is None:
+                if context.isolated_conversation_context:
+                    pass
+                elif summarize_short_relationship is None:
                     logger.error(
                         "The active agent does not support short-term relationship summaries"
                     )
@@ -557,7 +580,9 @@ async def process_single_conversation(
                     "summarize_long_term_relationship",
                     None,
                 )
-                if summarize_relationship is None:
+                if context.isolated_conversation_context:
+                    pass
+                elif summarize_relationship is None:
                     logger.error(
                         "The active agent does not support long-term relationship summaries"
                     )

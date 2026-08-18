@@ -136,6 +136,9 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           setConfUid(message.conf_uid);
           console.log('confUid', message.conf_uid);
         }
+        if (message.expression_dir) {
+          optionalExpressionFeature.reload(message.expression_dir);
+        }
         setPendingModelInfo(message.model_info);
         // setModelInfo(message.model_info);
         // We don't know when the confRef in live2d-config-context will be updated, so we set a delay here for convenience

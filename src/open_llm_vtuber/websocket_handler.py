@@ -16,7 +16,6 @@ from .chat_history_manager import (
     render_history_message_for_frontend,
     store_message,
 )
-from .conversation_starters import WELCOME_MESSAGE
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
 from .config_manager.tts import QWEN_TTS_VOICES
 from .conversations.conversation_handler import (
@@ -153,6 +152,7 @@ class WebSocketHandler:
                     "model_info": session_service_context.live2d_model.model_info,
                     "conf_name": session_service_context.character_config.conf_name,
                     "conf_uid": session_service_context.character_config.conf_uid,
+                    "expression_dir": session_service_context.character_config.expression_dir,
                 }
             )
         )
@@ -360,6 +360,7 @@ class WebSocketHandler:
         context = self.client_contexts[client_uid]
         # Update history_uid in service context
         context.history_uid = history_uid
+        context.english_mode = False
         context.agent_engine.set_memory_from_history(
             conf_uid=context.character_config.conf_uid,
             history_uid=history_uid,
@@ -390,12 +391,13 @@ class WebSocketHandler:
         )
         if history_uid:
             context.history_uid = history_uid
+            context.english_mode = False
             if context.conversation_starters_enabled:
                 store_message(
                     conf_uid=context.character_config.conf_uid,
                     history_uid=history_uid,
                     role="ai",
-                    content=WELCOME_MESSAGE,
+                    content=context.character_config.welcome_message,
                     name=context.character_config.character_name,
                     avatar=context.character_config.avatar,
                     history_root=context.history_root,
@@ -405,12 +407,14 @@ class WebSocketHandler:
                 history_uid,
                 context.history_root,
             )
-            recent_messages = get_recent_normal_history_messages(
-                context.character_config.conf_uid,
-                context.max_history_turns,
-                context.history_root,
-                exclude_history_uid=history_uid,
-            )
+            recent_messages = []
+            if not context.isolated_conversation_context:
+                recent_messages = get_recent_normal_history_messages(
+                    context.character_config.conf_uid,
+                    context.max_history_turns,
+                    context.history_root,
+                    exclude_history_uid=history_uid,
+                )
             set_memory_from_messages = getattr(
                 context.agent_engine, "set_memory_from_messages", None
             )
@@ -586,6 +590,7 @@ class WebSocketHandler:
         grok_api_key = data.get("grok_api_key")
         grok_enabled = data.get("grok_enabled")
         qwen_api_key = data.get("qwen_api_key")
+        deepseek_model = data.get("deepseek_model")
         if not isinstance(deepseek_api_key, str) or len(deepseek_api_key) > 4096:
             raise ValueError("Invalid DeepSeek API key")
         if not isinstance(grok_api_key, str) or len(grok_api_key) > 4096:
@@ -594,12 +599,18 @@ class WebSocketHandler:
             raise ValueError("Invalid Grok enabled state")
         if not isinstance(qwen_api_key, str) or len(qwen_api_key) > 4096:
             raise ValueError("Invalid Qwen API key")
+        if deepseek_model is not None and (
+            not isinstance(deepseek_model, str)
+            or deepseek_model not in ("deepseek-v4-pro", "deepseek-v4-flash")
+        ):
+            raise ValueError("Invalid DeepSeek model")
 
         self.client_contexts[client_uid].set_runtime_api_keys(
             deepseek_api_key=deepseek_api_key.strip(),
             grok_api_key=grok_api_key.strip(),
             grok_enabled=grok_enabled,
             qwen_api_key=qwen_api_key.strip(),
+            deepseek_model=deepseek_model,
         )
         await websocket.send_text(json.dumps({"type": "api-keys-updated"}))
 
@@ -608,7 +619,7 @@ class WebSocketHandler:
     ) -> None:
         """Summarize pending completed turns without changing injection timing."""
         context = self.client_contexts[client_uid]
-        if context.debug_mode:
+        if context.debug_mode or context.isolated_conversation_context:
             await websocket.send_text(
                 json.dumps(
                     {
@@ -909,6 +920,7 @@ class WebSocketHandler:
                     "model_info": context.live2d_model.model_info,
                     "conf_name": context.character_config.conf_name,
                     "conf_uid": context.character_config.conf_uid,
+                    "expression_dir": context.character_config.expression_dir,
                 }
             )
         )

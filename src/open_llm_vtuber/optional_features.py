@@ -13,9 +13,20 @@ from loguru import logger
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OPTIONAL_FEATURE_DESCRIPTOR = "optional-feature.json"
-EXPRESSION_FEATURE_DIR = PROJECT_ROOT / "expression"
-EXPRESSION_MANIFEST_PATH = EXPRESSION_FEATURE_DIR / "manifest.json"
-EXPRESSION_BACKEND_PATH = EXPRESSION_FEATURE_DIR / "backend_filter.py"
+DEFAULT_EXPRESSION_DIR = "expression"
+
+
+def get_expression_feature_dir(expression_dir: str | None = None) -> Path:
+    """Resolve one character's expression feature folder under PROJECT_ROOT.
+
+    Only a bare directory name is accepted so the resolved path always stays a
+    direct child of the project root. Invalid or empty values fall back to the
+    legacy ``expression`` directory and degrade to "unavailable".
+    """
+    name = (expression_dir or "").strip() or DEFAULT_EXPRESSION_DIR
+    if Path(name).name != name or name in (".", ".."):
+        name = DEFAULT_EXPRESSION_DIR
+    return PROJECT_ROOT / name
 
 
 def get_optional_feature() -> tuple[Path, dict[str, Any]] | None:
@@ -76,10 +87,15 @@ def build_optional_request_context(optional_contexts: Any) -> str:
         return ""
 
 
-def get_expression_manifest() -> dict[str, Any] | None:
+def get_expression_manifest(
+    expression_dir: str | None = None,
+) -> dict[str, Any] | None:
     """Read and validate the removable expression feature manifest."""
+    feature_dir = get_expression_feature_dir(expression_dir)
+    manifest_path = feature_dir / "manifest.json"
+    backend_path = feature_dir / "backend_filter.py"
     try:
-        with EXPRESSION_MANIFEST_PATH.open("r", encoding="utf-8") as manifest_file:
+        with manifest_path.open("r", encoding="utf-8") as manifest_file:
             manifest = json.load(manifest_file)
     except (OSError, ValueError, TypeError):
         return None
@@ -91,9 +107,9 @@ def get_expression_manifest() -> dict[str, Any] | None:
     emotions = manifest.get("emotions")
     if not isinstance(entry, str) or not isinstance(emotions, dict):
         return None
-    if not (EXPRESSION_FEATURE_DIR / entry).is_file():
+    if not (feature_dir / entry).is_file():
         return None
-    if not EXPRESSION_BACKEND_PATH.is_file():
+    if not backend_path.is_file():
         return None
 
     valid_emotions = {
@@ -103,7 +119,7 @@ def get_expression_manifest() -> dict[str, Any] | None:
         and isinstance(filename, str)
         and Path(filename).name == filename
         and filename.lower().endswith(".png")
-        and (EXPRESSION_FEATURE_DIR / filename).is_file()
+        and (feature_dir / filename).is_file()
     }
     if not valid_emotions:
         return None
@@ -111,17 +127,18 @@ def get_expression_manifest() -> dict[str, Any] | None:
     return {**manifest, "emotions": valid_emotions}
 
 
-def expression_feature_available() -> bool:
-    return get_expression_manifest() is not None
+def expression_feature_available(expression_dir: str | None = None) -> bool:
+    return get_expression_manifest(expression_dir) is not None
 
 
-def _load_expression_backend() -> ModuleType | None:
-    if not expression_feature_available():
+def _load_expression_backend(expression_dir: str | None = None) -> ModuleType | None:
+    if not expression_feature_available(expression_dir):
         return None
+    backend_path = get_expression_feature_dir(expression_dir) / "backend_filter.py"
     try:
         spec = importlib.util.spec_from_file_location(
             "optional_static_expression_filter",
-            EXPRESSION_BACKEND_PATH,
+            backend_path,
         )
         if spec is None or spec.loader is None:
             return None
@@ -133,14 +150,18 @@ def _load_expression_backend() -> ModuleType | None:
         return None
 
 
-def process_expression_output(display_text: str, tts_text: str) -> dict[str, Any]:
+def process_expression_output(
+    display_text: str,
+    tts_text: str,
+    expression_dir: str | None = None,
+) -> dict[str, Any]:
     """Filter one completed reply; failures preserve the original output."""
     fallback = {
         "display_text": display_text,
         "tts_text": tts_text,
         "emotion": None,
     }
-    module = _load_expression_backend()
+    module = _load_expression_backend(expression_dir)
     if module is None:
         return fallback
     processor = getattr(module, "process_output", None)
@@ -153,7 +174,7 @@ def process_expression_output(display_text: str, tts_text: str) -> dict[str, Any
         cleaned_display = result.get("display_text")
         cleaned_tts = result.get("tts_text")
         emotion = result.get("emotion")
-        manifest = get_expression_manifest()
+        manifest = get_expression_manifest(expression_dir)
         if (
             not isinstance(cleaned_display, str)
             or not isinstance(cleaned_tts, str)

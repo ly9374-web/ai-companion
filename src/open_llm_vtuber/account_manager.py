@@ -138,6 +138,15 @@ def account_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
+def isolates_conversation_context(account_name: object) -> bool:
+    """Return whether an account must use only its active conversation context."""
+    try:
+        normalized = normalize_account_name(account_name)
+    except InvalidAccountName:
+        return False
+    return account_key(normalized).endswith("cs")
+
+
 def get_account_history_root(account_name: str) -> Path:
     """Return the validated directory for one canonical account name."""
     return CHAT_HISTORY_ROOT / normalize_account_name(account_name)

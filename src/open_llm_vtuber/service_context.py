@@ -41,6 +41,7 @@ from .account_manager import (
     ensure_character_profile,
     get_account_history_root,
     has_conversation_starters,
+    isolates_conversation_context,
 )
 from .long_term_memory_manager import LongTermMemoryManager
 from .long_term_relationship_manager import LongTermRelationshipManager
@@ -99,6 +100,10 @@ class ServiceContext:
         self.history_uid: str = ""
         self.account_name: str = ""
         self.conversation_starters_enabled = False
+        # Whether the user selected the English conversation starter, so every
+        # subsequent user prompt is steered to expect an English reply.
+        self.english_mode: bool = False
+        self.isolated_conversation_context = False
         self.history_root = Path("chat_history")
         self.send_text: Callable = None
         self.client_uid: str = None
@@ -133,6 +138,9 @@ class ServiceContext:
         """Scope every persistent conversation service to one local account."""
         self.account_name = account_name
         self.conversation_starters_enabled = has_conversation_starters(account_name)
+        self.isolated_conversation_context = isolates_conversation_context(
+            account_name
+        )
         self.history_root = get_account_history_root(account_name)
         ensure_character_profile(account_name, self.character_config.conf_uid)
         self.character_config.human_name = account_name
@@ -519,6 +527,7 @@ class ServiceContext:
         grok_api_key: str,
         grok_enabled: bool,
         qwen_api_key: str,
+        deepseek_model: str | None = None,
     ) -> None:
         """Apply browser-provided credentials to this session without persistence."""
         self._deepseek_api_key = deepseek_api_key
@@ -542,6 +551,12 @@ class ServiceContext:
             set_grok_enabled = getattr(self.agent_engine, "set_grok_enabled", None)
             if callable(set_grok_enabled):
                 set_grok_enabled(grok_enabled)
+            if deepseek_model:
+                set_deepseek_model = getattr(
+                    self.agent_engine, "set_deepseek_model", None
+                )
+                if callable(set_deepseek_model):
+                    set_deepseek_model(deepseek_model)
 
         tts_config = self.character_config.tts_config
         if tts_config.tts_model == "qwen_tts" and tts_config.qwen_tts is not None:
@@ -647,7 +662,7 @@ class ServiceContext:
             llm_configs = agent_config.llm_configs.model_dump()
             deepseek_config = llm_configs.get("deepseek_llm")
             if deepseek_config is not None:
-                if self._deepseek_api_key is not None:
+                if self._deepseek_api_key:
                     deepseek_config["llm_api_key"] = self._deepseek_api_key
                 elif not deepseek_config.get("llm_api_key"):
                     # Browser-managed credentials arrive only after the WebSocket
@@ -658,7 +673,7 @@ class ServiceContext:
 
             grok_config = llm_configs.get("grok_llm")
             if grok_config is not None:
-                if self._grok_api_key is not None:
+                if self._grok_api_key:
                     grok_config["llm_api_key"] = self._grok_api_key
                 elif not grok_config.get("llm_api_key"):
                     grok_config["llm_api_key"] = "runtime-key-pending"
@@ -820,6 +835,7 @@ class ServiceContext:
                             "model_info": self.live2d_model.model_info,
                             "conf_name": self.character_config.conf_name,
                             "conf_uid": self.character_config.conf_uid,
+                            "expression_dir": self.character_config.expression_dir,
                         }
                     )
                 )

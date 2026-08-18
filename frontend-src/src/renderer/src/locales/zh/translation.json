@@ -80,6 +80,7 @@
     "key": {
       "deepseek": "DeepSeek Key",
       "deepseekPlaceholder": "输入 DeepSeek Key",
+      "deepseekModel": "DeepSeek 模型",
       "grok": "Grok Key",
       "grokPlaceholder": "输入 xAI Grok Key",
       "grokEnabled": "使用 Grok 聊天",

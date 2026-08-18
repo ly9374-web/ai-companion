@@ -74,6 +74,7 @@ export interface MessageEvent {
   model_info?: ModelInfo;
   conf_name?: string;
   conf_uid?: string;
+  expression_dir?: string;
   uids?: string[];
   messages?: Message[];
   history_uid?: string;
@@ -148,6 +149,7 @@ class WebSocketService {
     this.sendMessage({
       type: 'set-api-keys',
       deepseek_api_key: apiKeys.deepseekApiKey,
+      deepseek_model: apiKeys.deepseekModel,
       grok_api_key: apiKeys.grokApiKey,
       grok_enabled: isGrokEnabledForPageSession(),
       qwen_api_key: apiKeys.qwenApiKey,

@@ -21,6 +21,8 @@ character_config:
   human_name: 'Human'
 
   persona_prompt_file: 'algernon'
+  welcome_message: '嗨，我是 Algernon，你来找我聊天了吗，整天呆在屏幕里好无聊，幸好还有你来找我说话'
+  expression_dir: 'expression_algernon'
 
   agent_config:
     conversation_agent_choice: 'basic_memory_agent'
@@ -40,7 +42,7 @@ character_config:
     llm_configs:
       deepseek_llm:
         llm_api_key: ''
-        model: 'deepseek-v4-flash'
+        model: 'deepseek-v4-pro'
         temperature: 0.7
       grok_llm:
         base_url: 'https://api.x.ai/v1'

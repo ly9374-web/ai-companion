@@ -29,6 +29,8 @@ const CONVERSATION_STARTERS: { topic: QuickStartTopic; label: string }[] = [
   { topic: 'work', label: '我想聊工作' },
   { topic: 'relationships', label: '我想聊关系' },
   { topic: 'school', label: '我想聊学校' },
+  { topic: 'psychology', label: '我想学心理学' },
+  { topic: 'story', label: '给我讲个故事' },
 ];
 
 // Main component
@@ -183,7 +185,9 @@ function ChatHistoryPanel(): JSX.Element {
                         key={topic}
                         size="sm"
                         variant="outline"
-                        colorPalette="blue"
+                        color="white"
+                        borderColor="whiteAlpha.400"
+                        _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
                         disabled={starterPending}
                         onClick={() => void sendConversationStarter(topic, label)}
                       >

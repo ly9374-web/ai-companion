@@ -312,3 +312,8 @@ class AsyncLLM(StatelessLLMInterface):
     def set_api_key(self, api_key: str) -> None:
         """Replace credentials for this in-memory client without persisting them."""
         self.client.api_key = api_key
+
+    def set_model(self, model: str) -> None:
+        """Switch the model used for subsequent completions at runtime."""
+        self.model = model
+        logger.info("AsyncLLM model switched to {}", model)

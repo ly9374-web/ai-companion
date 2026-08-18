@@ -21,6 +21,10 @@ class CharacterConfig(I18nMixin):
     avatar: str = Field(default="", alias="avatar")
     persona_prompt: str = Field("", alias="persona_prompt")
     persona_prompt_file: str | None = Field(None, alias="persona_prompt_file")
+    welcome_message: str = Field(
+        default="你好啊，今天有什么想聊的吗？", alias="welcome_message"
+    )
+    expression_dir: str = Field("expression", alias="expression_dir")
     agent_config: AgentConfig = Field(..., alias="agent_config")
     asr_config: ASRConfig = Field(..., alias="asr_config")
     tts_config: TTSConfig = Field(..., alias="tts_config")
@@ -49,6 +53,14 @@ class CharacterConfig(I18nMixin):
         "persona_prompt_file": Description(
             en="Character prompt key in prompts/prompts.yaml",
             zh="prompts/prompts.yaml 中的角色 prompt 键名",
+        ),
+        "welcome_message": Description(
+            en="Welcome message the character sends when a new chat begins",
+            zh="新对话开始时角色发送的欢迎语",
+        ),
+        "expression_dir": Description(
+            en="Project-root folder holding this character's expression feature",
+            zh="项目根目录下该角色表情功能所在的文件夹名",
         ),
         "agent_config": Description(
             en="Configuration for the conversation agent", zh="对话代理配置"

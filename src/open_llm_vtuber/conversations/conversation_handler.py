@@ -78,6 +78,11 @@ async def handle_conversation_trigger(
                 raise ValueError("Unsupported conversation starter")
             user_input = starter["prompt"]
             metadata = {"history_display_text": starter["label"]}
+            # Selecting the English starter puts the session into English mode:
+            # every later user prompt is steered to expect an English reply.
+            # Any other starter leaves the mode off.
+            context.english_mode = quick_start_topic == "english"
+            metadata["quick_start"] = True
         else:
             user_input = data.get("text", "")
     else:  # mic-audio-end

@@ -11,7 +11,7 @@ import { getMissingChatApiKeyProvider } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
 
-export type QuickStartTopic = 'english' | 'work' | 'relationships' | 'school';
+export type QuickStartTopic = 'english' | 'work' | 'relationships' | 'school' | 'psychology' | 'story';
 
 interface SendTextMessageOptions {
   quickStartTopic?: QuickStartTopic;

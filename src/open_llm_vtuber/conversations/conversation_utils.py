@@ -63,6 +63,7 @@ async def process_agent_output(
             expression_result = process_expression_output(
                 output.display_text.text,
                 output.tts_text,
+                expression_dir=getattr(character_config, "expression_dir", None),
             )
             output.display_text.text = expression_result["display_text"]
             output.tts_text = expression_result["tts_text"]

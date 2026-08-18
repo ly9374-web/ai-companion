@@ -5,6 +5,8 @@ character_config:
   conf_uid: "cuige_preset_001"
   character_name: "崔格"
   persona_prompt_file: "cuige"
+  welcome_message: "你好呀，我是崔格，最近我刚拥有可以看到你表情的功能，要不要和我聊聊现在生活中的事，ai最会保密了，你说什么我都不会说出去"
+  expression_dir: "expression_cuige"
 
 # you may add more custom settings
 # refer to the main conf.yaml for available settings
