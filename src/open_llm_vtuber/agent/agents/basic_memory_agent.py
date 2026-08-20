@@ -9,6 +9,8 @@ from typing import (
     Optional,
 )
 from pathlib import Path
+import re
+import datetime
 from loguru import logger
 from .agent_interface import AgentInterface
 from ..output_types import SentenceOutput, DisplayText
@@ -38,7 +40,13 @@ class BasicMemoryAgent(AgentInterface):
         "search it from the website",
         "帮我从网上搜索",
     )
+    # 正则触发的搜索关键词；命中后用 _extract_search_query 提取查询词
+    _WEB_SEARCH_TRIGGER_PATTERN = re.compile(
+        r"(?:帮我)?从网上搜索|上网查|搜一下|search it from the website",
+        re.IGNORECASE,
+    )
     _WEB_SEARCH_TOOL_NAMES = frozenset(("search", "fetch_content"))
+    _WEB_SEARCH_RESULT_MAX_CHARS = 1500
     _CONTEXT_INJECTION_KEYS = (
         "long_term_relationship_context",
         "short_term_relationship_context",
@@ -438,13 +446,32 @@ class BasicMemoryAgent(AgentInterface):
 
     @classmethod
     def _web_search_requested(cls, input_data: BatchInput) -> bool:
-        """Enable web tools only for the two exact, case-sensitive trigger phrases."""
+        """Enable web tools only when a search trigger phrase is detected."""
         return any(
-            phrase in text_data.content
+            cls._WEB_SEARCH_TRIGGER_PATTERN.search(text_data.content)
             for text_data in input_data.texts
             if text_data.source == TextSource.INPUT
-            for phrase in cls._WEB_SEARCH_TRIGGER_PHRASES
         )
+
+    @classmethod
+    def _extract_search_query(cls, input_data: BatchInput) -> str:
+        """从触发短语之后到第一个句号之间提取搜索关键词。
+
+        无句号时取到句末；提取结果为空则返回空串（调用方据此跳过搜索）。
+        """
+        for text_data in input_data.texts:
+            if text_data.source != TextSource.INPUT:
+                continue
+            match = cls._WEB_SEARCH_TRIGGER_PATTERN.search(text_data.content)
+            if not match:
+                continue
+            after = text_data.content[match.end():]
+            stop = re.search(r"[。.]", after)
+            query = after[: stop.start()] if stop else after
+            query = query.strip(" ，,。.")
+            if query:
+                return query
+        return ""
 
     def _get_web_search_tools(self) -> List[Dict[str, Any]]:
         """Return only DuckDuckGo search and webpage-fetch tools."""
@@ -455,7 +482,11 @@ class BasicMemoryAgent(AgentInterface):
             in self._WEB_SEARCH_TOOL_NAMES
         ]
 
-    def _to_messages(self, input_data: BatchInput) -> List[Dict[str, Any]]:
+    def _to_messages(
+        self,
+        input_data: BatchInput,
+        web_search_context: str = "",
+    ) -> List[Dict[str, Any]]:
         """Prepare messages for LLM API call."""
         user_content = []
         text_prompt = self._to_text_prompt(input_data)
@@ -516,6 +547,7 @@ class BasicMemoryAgent(AgentInterface):
             long_term_relationship_context=long_term_relationship_context,
             short_term_relationship_context=short_term_relationship_context,
             has_images=bool(input_data.images),
+            web_search_context=web_search_context,
         )
 
         if request_text:
@@ -927,66 +959,101 @@ class BasicMemoryAgent(AgentInterface):
             self.prompt_mode_flag = not getattr(active_llm, "support_tools", True)
             self._turn_sequence += 1
             turn_id = self._turn_sequence
-
-            messages = self._to_messages(input_data)
             debug_mode = bool(
                 input_data.metadata and input_data.metadata.get("debug_mode")
             )
-            tools = None
-            tool_mode = None
-            llm_supports_native_tools = False
 
-            web_search_requested = self._web_search_requested(input_data)
-
-            if self._use_mcpp and self._tool_manager and web_search_requested:
-                tools = None
-                if isinstance(active_llm, OpenAICompatibleAsyncLLM):
-                    tool_mode = "OpenAI"
-                    tools = self._get_web_search_tools()
-                    llm_supports_native_tools = True
-                else:
-                    logger.warning(
-                        f"LLM type {type(active_llm)} not explicitly handled for tool mode determination."
+            # 正则工具路由：命中搜索触发词时，代码直接调用 ddg-search，
+            # 跳过模型自主工具调用与 mcp_prompt 拼接。
+            web_search_context = ""
+            if (
+                self._use_mcpp
+                and self._tool_executor
+                and self._web_search_requested(input_data)
+            ):
+                query = self._extract_search_query(input_data)
+                if query:
+                    tool_id = f"regex_search_{turn_id}"
+                    now_ts = (
+                        datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        + "Z"
                     )
-
-                if llm_supports_native_tools and not tools:
-                    logger.warning(
-                        f"No tools available/formatted for '{tool_mode}' mode, despite MCP being enabled."
+                    yield {
+                        "type": "tool_call_status",
+                        "tool_id": tool_id,
+                        "tool_name": "search",
+                        "status": "running",
+                        "content": prompt_builder.load_runtime_prompt(
+                            "web_searching_status"
+                        ),
+                        "timestamp": now_ts,
+                    }
+                    is_error, text_content, _, _ = (
+                        await self._tool_executor.run_single_tool(
+                            "search", tool_id, {"query": query}
+                        )
                     )
-
-            if self._use_mcpp and tool_mode == "OpenAI" and tools:
-                logger.debug(
-                    f"Starting OpenAI tool interaction loop with {len(tools)} tools."
-                )
-                async for output in self._openai_tool_interaction_loop(
-                    messages,
-                    tools if tools else [],
-                    turn_id,
-                    active_llm,
-                    debug_mode,
-                ):
-                    yield output
-                return
-            else:
-                token_stream = active_llm.chat_completion(messages, self._system)
-                complete_response = ""
-                async for event in token_stream:
-                    text_chunk = ""
-                    if isinstance(event, dict) and event.get("type") == "text_delta":
-                        text_chunk = event.get("text", "")
-                    elif isinstance(event, str):
-                        text_chunk = event
+                    now_ts = (
+                        datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        + "Z"
+                    )
+                    if is_error or not text_content:
+                        web_search_context = prompt_builder.build_web_search_context(
+                            prompt_builder.load_runtime_prompt("web_search_failed")
+                        )
+                        yield {
+                            "type": "tool_call_status",
+                            "tool_id": tool_id,
+                            "tool_name": "search",
+                            "status": "error",
+                            "content": text_content
+                            or prompt_builder.load_runtime_prompt(
+                                "web_search_failed"
+                            ),
+                            "timestamp": now_ts,
+                        }
                     else:
-                        continue
-                    if text_chunk:
-                        yield text_chunk
-                        complete_response += text_chunk
-                if complete_response:
-                    self._add_message(
-                        complete_response,
-                        "assistant",
-                        debug_mode=debug_mode,
+                        truncated = text_content[
+                            : self._WEB_SEARCH_RESULT_MAX_CHARS
+                        ]
+                        web_search_context = (
+                            prompt_builder.build_web_search_context(truncated)
+                        )
+                        yield {
+                            "type": "tool_call_status",
+                            "tool_id": tool_id,
+                            "tool_name": "search",
+                            "status": "completed",
+                            "content": truncated[:200],
+                            "timestamp": now_ts,
+                        }
+                else:
+                    web_search_context = prompt_builder.build_web_search_context(
+                        prompt_builder.load_runtime_prompt("web_search_empty")
                     )
+
+            messages = self._to_messages(
+                input_data, web_search_context=web_search_context
+            )
+            token_stream = active_llm.chat_completion(messages, self._system)
+            complete_response = ""
+            async for event in token_stream:
+                text_chunk = ""
+                if isinstance(event, dict) and event.get("type") == "text_delta":
+                    text_chunk = event.get("text", "")
+                elif isinstance(event, str):
+                    text_chunk = event
+                else:
+                    continue
+                if text_chunk:
+                    yield text_chunk
+                    complete_response += text_chunk
+            if complete_response:
+                self._add_message(
+                    complete_response,
+                    "assistant",
+                    debug_mode=debug_mode,
+                )
 
         return chat_with_memory
 

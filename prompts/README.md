@@ -5,10 +5,13 @@
 打开该 YAML 后可直接修改：
 
 - `chat.characters.algernon.system_prompt`：Algernon 完整 system prompt。
+- `chat.characters.liya.system_prompt`：莉娅完整 system prompt。
+- `chat.characters.generated_default.system_prompt`：新增角色的统一初始 system prompt。
 - `chat.characters.cuige.system_prompt`：崔格完整 system prompt。
 - `chat.user_prompt`：普通聊天当轮完整 user prompt 结构。
 - `chat.contexts`：长期记忆、长期关系和短期关系的包装文本与插入位置。
 - `summaries`：三种总结调用各自完整的 system prompt 和 user prompt。
+- `character_generation.expression_prompts`：新增角色的表情图片生成 prompt。
 - `utility`、`tools`、`runtime`：MCP、图片、打断与错误信息等其他 prompt。
 
 `{user_input}`、`{emomap_keys}`、`{recent_turns_json}` 等是程序在运行时填入的占位符。可修改它们周围的任何文字和顺序，但不要修改占位符名称。

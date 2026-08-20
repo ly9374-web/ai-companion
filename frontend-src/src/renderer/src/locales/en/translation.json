@@ -89,7 +89,8 @@
     },
     "live2d": {
       "pointerInteractive": "Pointer Interactive",
-      "scrollToResize": "Enable Scroll to Resize"
+      "scrollToResize": "Enable Scroll to Resize",
+      "addCharacter": "Add Character"
     },
     "key": {
       "deepseek": "DeepSeek Key",
@@ -100,7 +101,9 @@
       "grokEnabled": "Use Grok for Chat",
       "grokEnabledHelp": "When enabled, only interactive model chat uses Grok. Long-term memory, long-term relationship, short-term relationship, and rolling summaries continue to use DeepSeek. This switch turns off after a page reload or a new page session.",
       "qwen": "Qwen Key",
-      "qwenPlaceholder": "Enter Qwen Key"
+      "qwenPlaceholder": "Enter Qwen Key",
+      "replicate": "Replicate Key",
+      "replicatePlaceholder": "Enter Replicate Key"
     },
     "asr": {
       "autoStopMic": "Auto Stop Mic When AI Start Speaking",
@@ -113,8 +116,8 @@
       "positiveSpeechThresholdDesc": "Minimum confidence level (1-100) required to detect speech. Higher values reduce false positives",
       "negativeSpeechThreshold": "Negative Speech Threshold",
       "negativeSpeechThresholdDesc": "Confidence level (0-100) below which speech detection stops. Lower values make detection less sensitive",
-      "redemptionFrames": "Redemption Frames",
-      "redemptionFramesDesc": "Number of consecutive frames (1-100) needed to confirm speech detection. Higher values reduce noise triggers"
+      "pauseThreshold": "Pause Threshold (seconds)",
+      "pauseThresholdDesc": "How long the silence after you stop speaking (0.5-10 seconds) must last before the audio is sent. Default is 3 seconds"
     },
     "agent": {
       "allowProactiveSpeak": "Allow AI to Speak Proactively",
@@ -181,7 +184,7 @@
     "websocketNotOpen": "WebSocket is not open.",
     "deepseekApiKeyRequired": "Add your DeepSeek Key in Settings → Key before sending a message.",
     "grokApiKeyRequired": "Grok is enabled. Add your Grok Key in Settings → Key before sending a message.",
-    "vadMisfire": "Voice detected but too brief. Try speaking louder/longer, or adjust settings (lower speech threshold, lower negative threshold, reduce redemption frames)."
+    "vadMisfire": "Voice detected but too brief. Try speaking louder/longer, or adjust settings (lower speech threshold, lower negative threshold, reduce pause threshold)."
   },
   "aiState": {
     "idle": "idle",
@@ -195,6 +198,30 @@
     "connected": "Connected",
     "connecting": "Connecting",
     "clickToReconnect": "Click to Reconnect"
+  },
+  "characterCreator": {
+    "title": "Add Character",
+    "description": "Upload a character reference and chat avatar. Generation runs in the background while you continue using the app.",
+    "nameLabel": "Character Name",
+    "namePlaceholder": "Enter a character name",
+    "referenceLabel": "Reference Image",
+    "avatarLabel": "Character Avatar",
+    "costNotice": "This runs 9 sequential high-quality image generations on Replicate.",
+    "create": "Start Generation",
+    "submitting": "Submitting…",
+    "requiredFields": "Enter a character name and upload both images",
+    "replicateKeyRequired": "Save your Replicate Key in Settings → Key first",
+    "acceptedTitle": "Character generation started",
+    "acceptedDescription": "The job is running in the background. You will be notified when it finishes.",
+    "runningTitle": "Generating character: {{name}}",
+    "progressQueued": "Waiting for background processing…",
+    "progressPreparing": "Removing the reference background and preparing the transparent canvas…",
+    "progressGenerating": "Generating {{completed}}/{{total}}: {{emotion}}",
+    "progressPublishing": "Creating the character configuration and expression files…",
+    "completeTitle": "New character complete",
+    "completeDescription": "{{name}} has been added to the character list.",
+    "failedTitle": "Character generation failed",
+    "failedDescription": "Please try again later"
   },
   "cameraInvite": {
     "title": "Enable Camera?",

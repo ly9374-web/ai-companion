@@ -64,6 +64,18 @@ def _is_time_request(input_text: str) -> bool:
     return normalized in TIME_REQUEST_COMMANDS
 
 
+ENGLISH_REPLY_SUFFIX = "此次回复语言为：英文"
+
+
+def _english_letter_ratio(input_text: str) -> float:
+    """ASCII 英文字母占全部字母字符的比例；无字母（数字/标点/表情）返回 0。"""
+    letters = [char for char in input_text if char.isalpha()]
+    if not letters:
+        return 0.0
+    english = sum(1 for char in letters if char.isascii())
+    return english / len(letters)
+
+
 def _is_first_turn(
     conf_uid: str,
     history_uid: str,
@@ -323,13 +335,21 @@ async def process_single_conversation(
                         )
                     )
 
-        # In English mode, steer every subsequent user prompt to expect an
-        # English reply. The starter itself already carries its own instruction,
-        # so it is left untouched, and the suffix is only added to the LLM
-        # prompt (not to the stored history or memory).
+        # 英文回复引导：英语练习模式（“我想练英语”）或输入以英文为主
+        # （英文字母占比 > 50%）时，给 LLM 提示词追加语言后缀；快速开场白
+        # 自带指令不处理，后缀只进 LLM 提示词、不进聊天历史。若输入中已
+        # 含该后缀则不重复拼接。
         prompt_text = input_text
-        if context.english_mode and not is_quick_start and input_text.strip():
-            prompt_text = f"{input_text}\n此次回复语言为：英文"
+        if (
+            input_text.strip()
+            and not is_quick_start
+            and ENGLISH_REPLY_SUFFIX not in input_text
+            and (
+                context.english_mode
+                or _english_letter_ratio(input_text) > 0.5
+            )
+        ):
+            prompt_text = f"{input_text}\n{ENGLISH_REPLY_SUFFIX}"
 
         # Create batch input
         batch_input = create_batch_input(

@@ -331,6 +331,10 @@ export function createCameraEmotionFeature(config = {}) {
       reportDiagnostic(aggregate ? 'aggregate_ready' : 'aggregate_empty', aggregate || {});
       return aggregate;
     },
+    // 最近一次有效心率（5 秒内），供“按 j 带入心率”在发消息时读取。
+    getLatestHeartRate() {
+      return tracker.getLatestHeartRate();
+    },
     destroy() {
       running = false;
       profileStateListeners.clear();

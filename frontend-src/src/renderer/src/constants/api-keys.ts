@@ -1,6 +1,7 @@
 export const DEEPSEEK_API_KEY_STORAGE_KEY = 'deepseekApiKey';
 export const GROK_API_KEY_STORAGE_KEY = 'grokApiKey';
 export const QWEN_API_KEY_STORAGE_KEY = 'qwenApiKey';
+export const REPLICATE_API_KEY_STORAGE_KEY = 'replicateApiKey';
 export const DEEPSEEK_MODEL_STORAGE_KEY = 'deepseekModel';
 
 export const DEEPSEEK_MODEL_PRO = 'deepseek-v4-pro';
@@ -32,12 +33,14 @@ export function getStoredApiKeys(): {
   deepseekApiKey: string;
   grokApiKey: string;
   qwenApiKey: string;
+  replicateApiKey: string;
   deepseekModel: string;
 } {
   return {
     deepseekApiKey: getStoredString(DEEPSEEK_API_KEY_STORAGE_KEY),
     grokApiKey: getStoredString(GROK_API_KEY_STORAGE_KEY),
     qwenApiKey: getStoredString(QWEN_API_KEY_STORAGE_KEY),
+    replicateApiKey: getStoredString(REPLICATE_API_KEY_STORAGE_KEY),
     deepseekModel: getStoredDeepseekModel(),
   };
 }

@@ -66,8 +66,8 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
             zh="每次大模型请求携带的最近完整对话轮数（默认：8）",
         ),
         "use_mcpp": Description(
-            en="Whether to use MCP (Model Context Protocol) for the agent (default: True)",
-            zh="是否使用为智能体启用 MCP (Model Context Protocol) Plus（默认：False）",
+            en="Enable regex-triggered tool routing: when a search trigger phrase is detected, the agent calls the MCP tool directly and injects results into the user prompt, skipping the model's autonomous tool-calling loop (default: False)",
+            zh="启用正则工具路由：检测到搜索触发词时代码直接调用 MCP 工具，并把结果拼进用户提示词，跳过模型自主工具调用（默认：False）",
         ),
         "mcp_enabled_servers": Description(
             en="List of MCP servers to enable for the agent",

@@ -1,6 +1,6 @@
 {
   "id": "camera",
-  "version": 18,
+  "version": 19,
   "backend_entry": "backend_context.py",
   "frontend_entry": "frontend/index.js",
   "electron_mac_usage_descriptions": {

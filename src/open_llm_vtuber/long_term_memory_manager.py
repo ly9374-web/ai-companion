@@ -1034,6 +1034,12 @@ class LongTermMemoryManager:
                             for memory in existing_memories
                         )
                         if batch_already_applied:
+                            logger.info(
+                                "Long-term memory reconcile skipped for history {}: "
+                                "batch {} already applied, resyncing RAG index",
+                                history_uid,
+                                source_batch_id,
+                            )
                             await asyncio.to_thread(
                                 memory_rag_store.sync,
                                 self._rag_scope_uid(conf_uid),
@@ -1058,12 +1064,25 @@ class LongTermMemoryManager:
                                     self._now_iso(),
                                 )
                             )
+                            logger.debug(
+                                "Long-term memory reconcile input:\n{}",
+                                json.dumps(
+                                    reconciliation_input,
+                                    ensure_ascii=False,
+                                    indent=2,
+                                    default=str,
+                                ),
+                            )
                             operations: list[MemoryReconcileOperation] | None = None
                             reconcile_error: Exception | None = None
                             for _ in range(3):
                                 try:
                                     raw_reconciliation = await reconcile(
                                         reconciliation_input
+                                    )
+                                    logger.info(
+                                        "Long-term memory reconcile raw output:\n{}",
+                                        raw_reconciliation,
                                     )
                                     operations = self.parse_reconciliation(
                                         raw_reconciliation,
@@ -1077,6 +1096,16 @@ class LongTermMemoryManager:
                                 raise ValueError(
                                     "Long-term memory reconciliation failed"
                                 ) from reconcile_error
+                            action_counts: dict[str, int] = {}
+                            for operation in operations:
+                                action_counts[operation.action] = (
+                                    action_counts.get(operation.action, 0) + 1
+                                )
+                            logger.info(
+                                "Long-term memory reconcile parsed {} operations: {}",
+                                len(operations),
+                                action_counts,
+                            )
                             await self._apply_reconciliation(
                                 conf_uid,
                                 operations,
@@ -1089,6 +1118,12 @@ class LongTermMemoryManager:
                     exc,
                 )
                 return "error"
+        else:
+            logger.info(
+                "Long-term memory reconcile skipped for history {}: no new "
+                "memories after dedup",
+                history_uid,
+            )
 
         async with self._get_history_lock(conf_uid, history_uid):
             state = self._get_state(conf_uid, history_uid)

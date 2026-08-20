@@ -88,6 +88,21 @@ def _render_heart_rate_sentence(aggregate: dict[str, Any]) -> str:
     return f"你检测到用户当前心率偏高（{int(round(avg_bpm))}）"
 
 
+def _render_requested_heart_rate_sentence(aggregate: dict[str, Any]) -> str:
+    """Return the j-key requested heart-rate sentence, or an empty string.
+
+    The bpm value is captured by the frontend at message-send time (latest
+    valid sample within 5 seconds); the backend only re-validates the range.
+    """
+    bpm = aggregate.get("requested_heart_rate_bpm")
+    if isinstance(bpm, bool) or not isinstance(bpm, (int, float)):
+        return ""
+    # NaN 参与比较结果为 False，会被该范围检查自然排除。
+    if not HEART_RATE_MIN_BPM <= bpm <= HEART_RATE_MAX_BPM:
+        return ""
+    return f"此时用户心率为“{int(round(bpm))}”回复中提到这一点"
+
+
 def build_request_context(optional_contexts: Any) -> str:
     """Return the request-scoped camera context lines, or an empty string."""
     if not isinstance(optional_contexts, dict):
@@ -100,6 +115,7 @@ def build_request_context(optional_contexts: Any) -> str:
         sentence
         for sentence in (
             _render_emotion_sentence(aggregate),
+            _render_requested_heart_rate_sentence(aggregate),
             _render_heart_rate_sentence(aggregate),
         )
         if sentence

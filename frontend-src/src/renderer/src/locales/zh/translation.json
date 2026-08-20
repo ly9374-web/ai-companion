@@ -89,7 +89,8 @@
     },
     "live2d": {
       "pointerInteractive": "鼠标交互",
-      "scrollToResize": "启用滚轮缩放"
+      "scrollToResize": "启用滚轮缩放",
+      "addCharacter": "新增角色"
     },
     "key": {
       "deepseek": "DeepSeek Key",
@@ -100,7 +101,9 @@
       "grokEnabled": "使用 Grok 聊天",
       "grokEnabledHelp": "开启后仅普通模型聊天切换为 Grok；长期记忆、长期关系、短期关系和滚动摘要仍使用 DeepSeek。刷新或重新进入页面后自动关闭。",
       "qwen": "Qwen Key",
-      "qwenPlaceholder": "输入 Qwen Key"
+      "qwenPlaceholder": "输入 Qwen Key",
+      "replicate": "Replicate Key",
+      "replicatePlaceholder": "输入 Replicate Key"
     },
     "asr": {
       "autoStopMic": "AI开始说话时自动关闭麦克风",
@@ -113,8 +116,8 @@
       "positiveSpeechThresholdDesc": "检测语音所需的最低置信度(1-100)，数值越高越能减少误检测",
       "negativeSpeechThreshold": "负面语音阈值",
       "negativeSpeechThresholdDesc": "停止语音检测的置信度下限(0-100)，数值越低检测越不敏感",
-      "redemptionFrames": "验证帧数",
-      "redemptionFramesDesc": "确认语音检测所需的连续帧数(1-100)，数值越高越能减少噪音触发"
+      "pauseThreshold": "停顿阈值(秒)",
+      "pauseThresholdDesc": "说完话后持续没人说话多久才发送音频(0.5-10秒)，默认3秒"
     },
     "agent": {
       "allowProactiveSpeak": "允许AI主动发言",
@@ -181,7 +184,7 @@
     "websocketNotOpen": "WebSocket未连接",
     "deepseekApiKeyRequired": "请先在设置 → Key 中填写 DeepSeek Key",
     "grokApiKeyRequired": "Grok 已开启，请先在设置 → Key 中填写 Grok Key",
-    "vadMisfire": "检测到语音但过于简短，请尝试提高音量或说得更久一些，或调整识别设置（降低语音识别阈值、降低负面语音阈值、减少验证帧数）"
+    "vadMisfire": "检测到语音但过于简短，请尝试提高音量或说得更久一些，或调整识别设置（降低语音识别阈值、降低负面语音阈值、减少停顿阈值）"
   },
   "aiState": {
     "idle": "空闲",
@@ -195,6 +198,30 @@
     "connected": "已连接",
     "connecting": "连接中",
     "clickToReconnect": "点击重新连接"
+  },
+  "characterCreator": {
+    "title": "新增角色",
+    "description": "上传人物参考图和聊天头像。生成任务会在后台运行，可以继续使用页面。",
+    "nameLabel": "角色名称",
+    "namePlaceholder": "输入角色名称",
+    "referenceLabel": "参考图片",
+    "avatarLabel": "人物头像",
+    "costNotice": "将按顺序调用 9 次 Replicate 高质量图片生成。",
+    "create": "开始生成",
+    "submitting": "正在提交…",
+    "requiredFields": "请填写角色名称并上传参考图片和人物头像",
+    "replicateKeyRequired": "请先保存设置 → Key 中的 Replicate Key",
+    "acceptedTitle": "角色生成已启动",
+    "acceptedDescription": "任务已转入后台，完成后会通知你。",
+    "runningTitle": "正在生成角色：{{name}}",
+    "progressQueued": "正在等待后台处理…",
+    "progressPreparing": "正在删除参考图背景并准备透明画布…",
+    "progressGenerating": "正在生成 {{completed}}/{{total}}：{{emotion}}",
+    "progressPublishing": "正在创建角色配置和表情文件…",
+    "completeTitle": "新角色已完成",
+    "completeDescription": "{{name}} 已加入角色列表。",
+    "failedTitle": "角色生成失败",
+    "failedDescription": "请稍后重试"
   },
   "cameraInvite": {
     "title": "开启摄像头？",

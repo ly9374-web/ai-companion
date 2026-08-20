@@ -1,5 +1,6 @@
 /* eslint-disable react/require-default-props */
 import { useState } from 'react';
+import type { HTMLInputTypeAttribute } from 'react';
 import {
   Text, Input, NumberInput, createListCollection, Flex, Box,
 } from '@chakra-ui/react';
@@ -86,6 +87,7 @@ interface InputFieldProps {
   onChange: (value: string) => void
   placeholder?: string
   help?: string
+  type?: HTMLInputTypeAttribute
 }
 
 // Reusable Components
@@ -187,6 +189,7 @@ export function InputField({
   onChange,
   placeholder,
   help,
+  type = 'text',
 }: InputFieldProps): JSX.Element {
   return (
     <Field
@@ -200,6 +203,7 @@ export function InputField({
     >
       <Input
         {...settingStyles.general.input}
+        type={type}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}

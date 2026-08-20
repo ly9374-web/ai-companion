@@ -60,6 +60,7 @@ def build_user_request(
     long_term_relationship_context: str = "",
     short_term_relationship_context: str = "",
     has_images: bool = False,
+    web_search_context: str = "",
 ) -> str:
     if not text_prompt and has_images:
         text_prompt = load_runtime_prompt("image_only_user_input")
@@ -89,6 +90,7 @@ def build_user_request(
             frontend_activity_context,
             tts_preference_change_context,
             rolling_summary_context,
+            web_search_context,
             rendered,
         )
     )
@@ -207,6 +209,10 @@ def build_short_term_relationship_summary_input(
 
 def build_tool_results(results: Iterable[str]) -> str:
     return join_prompt_lines(results)
+
+
+def build_web_search_context(content: str) -> str:
+    return load_runtime_prompt("web_search_context", content=content)
 
 
 def build_mcp_prompt(servers_info: dict[str, dict[str, Any]]) -> str:

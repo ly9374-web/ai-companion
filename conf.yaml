@@ -68,7 +68,7 @@ character_config:
       api_url: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer'
       api_key: ''
       model: 'qwen-audio-3.0-tts-flash'
-      voice: 'qwen-audio-3.0-tts-flash-longyuyaoluan'
+      voice: 'qwen-audio-3.0-tts-flash-longxueyujun'
       instruction: ''
       sample_rate: 24000
       rate: 1.0

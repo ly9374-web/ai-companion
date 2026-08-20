@@ -468,6 +468,13 @@ class ServiceContext:
         """Set the Qwen TTS voice for this client context only."""
         self.set_qwen_tts_options(voice=voice, notify_ai=True)
 
+    def get_current_tts_voice(self) -> str | None:
+        """Return the current Qwen TTS voice, if a Qwen engine is active."""
+        tts_config = self.character_config.tts_config
+        if tts_config.tts_model == "qwen_tts" and tts_config.qwen_tts is not None:
+            return tts_config.qwen_tts.voice
+        return None
+
     def set_rag_options(
         self,
         *,
@@ -970,6 +977,7 @@ class ServiceContext:
                             "conf_name": self.character_config.conf_name,
                             "conf_uid": self.character_config.conf_uid,
                             "expression_dir": self.character_config.expression_dir,
+                            "tts_voice": self.get_current_tts_voice(),
                         }
                     )
                 )

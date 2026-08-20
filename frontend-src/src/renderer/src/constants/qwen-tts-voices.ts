@@ -43,6 +43,10 @@ const getStoredChoice = (
   }
 };
 
+export const isValidQwenTtsVoice = (voice: unknown): voice is string =>
+  typeof voice === "string"
+  && QWEN_TTS_VOICES.some(({ value }) => value === voice);
+
 export const getStoredTtsVoice = (): string => {
   return getStoredChoice(
     TTS_VOICE_STORAGE_KEY,

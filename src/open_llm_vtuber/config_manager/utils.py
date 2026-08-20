@@ -149,6 +149,9 @@ def scan_config_alts_directory(config_alts_dir: str) -> list[dict]:
             )
             if default_config
             else "conf.yaml",
+            "conf_uid": default_config.get("character_config", {}).get("conf_uid")
+            if default_config
+            else None,
         }
     )
 
@@ -165,6 +168,11 @@ def scan_config_alts_directory(config_alts_dir: str) -> list[dict]:
                         )
                         if config
                         else file,
+                        "conf_uid": config.get("character_config", {}).get(
+                            "conf_uid"
+                        )
+                        if config
+                        else None,
                     }
                 )
     logger.debug(f"Found config files: {config_files}")

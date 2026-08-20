@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import re
@@ -5,7 +6,7 @@ from uuid import uuid4
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import numpy as np
 from datetime import datetime
-from fastapi import APIRouter, WebSocket, UploadFile, File, Response
+from fastapi import APIRouter, WebSocket, UploadFile, File, Form, Response
 from starlette.responses import FileResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 from loguru import logger
@@ -16,6 +17,13 @@ from .optional_features import (
     get_optional_feature,
     get_expression_feature_dir,
     get_expression_manifest,
+)
+from .character_generation import (
+    MAX_UPLOAD_BYTES,
+    CharacterGenerationConflict,
+    CharacterGenerationError,
+    CharacterGenerationManager,
+    normalize_uploaded_image,
 )
 from .account_manager import (
     AccountAlreadyExists,
@@ -231,6 +239,74 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
     """
 
     router = APIRouter()
+    character_generation_manager = CharacterGenerationManager()
+
+    @router.post("/api/characters/generation-jobs")
+    async def create_character_generation_job(
+        account: str = Form(...),
+        session_token: str = Form(..., alias="sessionToken"),
+        character_name: str = Form(...),
+        replicate_token: str = Form(...),
+        reference_image: UploadFile = File(...),
+        avatar_image: UploadFile = File(...),
+    ):
+        """Accept character inputs and return immediately with a background job."""
+        try:
+            canonical_account = resolve_authenticated_session(account, session_token)
+        except Exception as exc:
+            logger.exception("Failed to authenticate character generation request: {}", exc)
+            return JSONResponse({"error": "账号数据读取失败"}, status_code=500)
+        if canonical_account is None:
+            return JSONResponse({"error": "登录已失效"}, status_code=401)
+
+        try:
+            reference_data = await reference_image.read(MAX_UPLOAD_BYTES + 1)
+            avatar_data = await avatar_image.read(MAX_UPLOAD_BYTES + 1)
+            normalized_reference, normalized_avatar = await asyncio.gather(
+                asyncio.to_thread(
+                    normalize_uploaded_image, reference_data, "参考图片"
+                ),
+                asyncio.to_thread(
+                    normalize_uploaded_image, avatar_data, "人物头像"
+                ),
+            )
+            job = await character_generation_manager.create_job(
+                owner=canonical_account,
+                character_name=character_name,
+                replicate_token=replicate_token,
+                reference_image=normalized_reference,
+                avatar_image=normalized_avatar,
+            )
+        except CharacterGenerationConflict as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except CharacterGenerationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            logger.exception("Failed to start character generation: {}", exc)
+            return JSONResponse({"error": "无法启动角色生成任务"}, status_code=500)
+        finally:
+            await reference_image.close()
+            await avatar_image.close()
+
+        return JSONResponse(job.public_payload(), status_code=202)
+
+    @router.post("/api/characters/generation-jobs/{job_id}/status")
+    async def get_character_generation_job_status(job_id: str, payload: dict):
+        """Return one authenticated account's background generation status."""
+        try:
+            canonical_account = resolve_authenticated_session(
+                payload.get("account"), payload.get("sessionToken")
+            )
+        except Exception as exc:
+            logger.exception("Failed to authenticate character job status: {}", exc)
+            return JSONResponse({"error": "账号数据读取失败"}, status_code=500)
+        if canonical_account is None:
+            return JSONResponse({"error": "登录已失效"}, status_code=401)
+
+        job = await character_generation_manager.get_job(job_id, canonical_account)
+        if job is None:
+            return JSONResponse({"error": "生成任务不存在"}, status_code=404)
+        return JSONResponse(job.public_payload())
 
     @router.get("/optional-features/expression/manifest")
     async def get_optional_expression_manifest(dir: str | None = None):

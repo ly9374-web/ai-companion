@@ -126,6 +126,7 @@ export const useGeneralSettings = ({
         const newSettings = {
           ...settings,
           selectedCharacterPreset: [filename],
+          ttsVoice: [getStoredTtsVoice()],
         };
         setSettings(newSettings);
         setOriginalSettings(newSettings);

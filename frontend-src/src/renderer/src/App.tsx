@@ -28,10 +28,12 @@ import Background from "./components/canvas/background";
 import WebSocketStatus from "./components/canvas/ws-status";
 import { ModeProvider, useMode } from "./context/mode-context";
 import { useSpaceToTalk } from "./hooks/utils/use-space-to-talk";
+import { useHeartRateShortcut } from "./hooks/utils/use-heart-rate-shortcut";
 import { useManualSummary } from "./hooks/utils/use-manual-summary";
 import { AccountProvider, useAccount } from "./context/account-context";
 import LoginScreen from "./components/account/login-screen";
 import { CameraInviteDialog } from "./components/account/camera-invite-dialog";
+import { CharacterGenerationMonitor } from "./components/character/character-generation-monitor";
 
 function AppContent(): JSX.Element {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -40,6 +42,7 @@ function AppContent(): JSX.Element {
   const isElectron = window.api !== undefined;
   const live2dContainerRef = useRef<HTMLDivElement>(null);
   useSpaceToTalk();
+  useHeartRateShortcut();
   useManualSummary();
 
   useEffect(() => {
@@ -187,6 +190,7 @@ function AppWithGlobalStyles(): JSX.Element {
                           <BrowserProvider>
                             <WebSocketHandler>
                               <Toaster />
+                              <CharacterGenerationMonitor />
                               <AppContent />
                             </WebSocketHandler>
                           </BrowserProvider>

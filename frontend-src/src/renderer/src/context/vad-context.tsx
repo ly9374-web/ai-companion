@@ -22,8 +22,8 @@ export interface VADSettings {
   /** Threshold for negative speech detection (0-100) */
   negativeSpeechThreshold: number;
 
-  /** Number of frames for speech redemption */
-  redemptionFrames: number;
+  /** 停顿阈值（秒）：说话结束后持续静音多久才判定说完并发送 */
+  pauseThresholdSeconds: number;
 }
 
 /**
@@ -86,8 +86,25 @@ interface VADState {
 const DEFAULT_VAD_SETTINGS: VADSettings = {
   positiveSpeechThreshold: 50,
   negativeSpeechThreshold: 35,
-  redemptionFrames: 35,
+  pauseThresholdSeconds: 3,
 };
+
+/** Silero VAD v5 每帧 512 样本 @16kHz = 32ms */
+const VAD_FRAME_DURATION_SECONDS = 0.032;
+const MIN_PAUSE_THRESHOLD_SECONDS = 0.5;
+const MAX_PAUSE_THRESHOLD_SECONDS = 10;
+
+/** 停顿阈值非法或缺省（旧版本存的是验证帧数）时统一回落到默认 3 秒 */
+function normalizePauseThresholdSeconds(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_VAD_SETTINGS.pauseThresholdSeconds;
+  }
+  return Math.min(
+    MAX_PAUSE_THRESHOLD_SECONDS,
+    Math.max(MIN_PAUSE_THRESHOLD_SECONDS, parsed),
+  );
+}
 
 const DEFAULT_VAD_STATE = {
   micOn: false,
@@ -130,10 +147,21 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     DEFAULT_VAD_STATE.autoStopMic,
   );
   const autoStopMicRef = useRef(autoStopMic);
-  const [settings, setSettings] = useLocalStorage<VADSettings>(
+  const [storedSettings, setSettings] = useLocalStorage<VADSettings>(
     'vadSettings',
     DEFAULT_VAD_SETTINGS,
   );
+  // 旧数据迁移：历史设置里存的是“验证帧数”（redemptionFrames），没有
+  // pauseThresholdSeconds 字段，统一按默认 3 秒处理，保存后写入新结构。
+  const settings: VADSettings = {
+    positiveSpeechThreshold: storedSettings.positiveSpeechThreshold
+      ?? DEFAULT_VAD_SETTINGS.positiveSpeechThreshold,
+    negativeSpeechThreshold: storedSettings.negativeSpeechThreshold
+      ?? DEFAULT_VAD_SETTINGS.negativeSpeechThreshold,
+    pauseThresholdSeconds: normalizePauseThresholdSeconds(
+      storedSettings.pauseThresholdSeconds,
+    ),
+  };
   const [autoStartMicOn, setAutoStartMicOnState] = useLocalStorage(
     'autoStartMicOn',
     DEFAULT_VAD_STATE.autoStartMicOn,
@@ -337,7 +365,10 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       preSpeechPadFrames: VAD_PRE_SPEECH_PAD_FRAMES,
       positiveSpeechThreshold: settings.positiveSpeechThreshold / 100,
       negativeSpeechThreshold: settings.negativeSpeechThreshold / 100,
-      redemptionFrames: settings.redemptionFrames,
+      redemptionFrames: Math.max(
+        1,
+        Math.round(settings.pauseThresholdSeconds / VAD_FRAME_DURATION_SECONDS),
+      ),
       baseAssetPath: './libs/',
       onnxWASMBasePath: './libs/',
       onSpeechStart: handleSpeechStart,

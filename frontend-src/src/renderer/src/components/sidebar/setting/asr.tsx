@@ -81,12 +81,13 @@ function ASR({ onSave, onCancel }: ASRProps): JSX.Element {
       />
 
       <NumberField
-        label={t('settings.asr.redemptionFrames')}
-        help={t('settings.asr.redemptionFramesDesc')}
-        value={localSettings.redemptionFrames}
-        onChange={(value) => handleInputChange('redemptionFrames', value)}
-        min={1}
-        max={100}
+        label={t('settings.asr.pauseThreshold')}
+        help={t('settings.asr.pauseThresholdDesc')}
+        value={localSettings.pauseThresholdSeconds}
+        onChange={(value) => handleInputChange('pauseThresholdSeconds', value)}
+        min={0.5}
+        max={10}
+        step={0.5}
       />
     </Stack>
   );

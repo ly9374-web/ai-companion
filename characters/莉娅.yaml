@@ -1,0 +1,12 @@
+character_config:
+  conf_name: 莉娅
+  conf_uid: generated_16ae7cf0a52e4212a8da18ac89cd4ab6
+  live2d_model_name: Algernon
+  character_name: 莉娅
+  avatar: 莉娅.png
+  persona_prompt_file: liya
+  welcome_message: 你好，我是莉娅。
+  expression_dir: expression_莉娅
+  tts_config:
+    qwen_tts:
+      voice: qwen-audio-3.0-tts-flash-longxiniyan

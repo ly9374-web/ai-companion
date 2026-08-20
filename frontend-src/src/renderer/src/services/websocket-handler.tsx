@@ -18,7 +18,12 @@ import { toaster } from '@/components/ui/toaster';
 import { useVAD } from '@/context/vad-context';
 import { AiState, useAiState } from "@/context/ai-state-context";
 import { useBrowser } from '@/context/browser-context';
-import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
+import {
+  getStoredQwenTtsOptions,
+  getStoredTtsInstructionPreset,
+  setCurrentQwenTtsSettings,
+  isValidQwenTtsVoice,
+} from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
 import { getStoredRagSettings } from '@/constants/rag-settings';
 import { optionalFeature } from '@optional-feature';
@@ -131,6 +136,21 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         setAiState('loading');
         if (message.conf_name) {
           setConfName(message.conf_name);
+        }
+        if (isValidQwenTtsVoice(message.tts_voice)) {
+          const storedOptions = getStoredQwenTtsOptions();
+          if (storedOptions.voice !== message.tts_voice) {
+            setCurrentQwenTtsSettings(
+              message.tts_voice,
+              getStoredTtsInstructionPreset(),
+            );
+            wsService.sendMessage({
+              type: 'set-qwen-tts-options',
+              voice: message.tts_voice,
+              instruction: storedOptions.instruction,
+              sync_ai_preferences: true,
+            });
+          }
         }
         if (message.conf_uid) {
           setConfUid(message.conf_uid);

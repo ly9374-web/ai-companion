@@ -2,6 +2,8 @@ from typing import Dict, List, Optional, Callable, TypedDict
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 import json
+import os
+from pathlib import Path
 import numpy as np
 from loguru import logger
 
@@ -18,10 +20,16 @@ from .chat_history_manager import (
 )
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
 from .config_manager.tts import QWEN_TTS_VOICES
+from .account_manager import account_can_access_character
+from .utils.stream_audio import prepare_audio_payload
 from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_individual_interrupt,
 )
+
+
+_GREETING_AUDIO_DIR = "greeting_audio"
+_GREETING_AUDIO_FILENAME = "welcome_message.wav"
 
 
 class WSMessage(TypedDict, total=False):
@@ -63,6 +71,7 @@ class WebSocketHandler:
         self.current_conversation_tasks: Dict[str, Optional[asyncio.Task]] = {}
         self.default_context_cache = default_context_cache
         self.received_data_buffers: Dict[str, np.ndarray] = {}
+        self._greeting_audio_locks: Dict[str, asyncio.Lock] = {}
 
         # Message handlers mapping
         self._message_handlers = self._init_message_handlers()
@@ -157,6 +166,7 @@ class WebSocketHandler:
                     "conf_name": session_service_context.character_config.conf_name,
                     "conf_uid": session_service_context.character_config.conf_uid,
                     "expression_dir": session_service_context.character_config.expression_dir,
+                    "tts_voice": session_service_context.get_current_tts_voice(),
                 }
             )
         )
@@ -523,7 +533,17 @@ class WebSocketHandler:
     ) -> None:
         """Handle fetching available configurations"""
         context = self.client_contexts[client_uid]
-        config_files = scan_config_alts_directory(context.system_config.config_alts_dir)
+        scanned_configs = scan_config_alts_directory(
+            context.system_config.config_alts_dir
+        )
+        config_files = [
+            {"filename": config["filename"], "name": config["name"]}
+            for config in scanned_configs
+            if account_can_access_character(
+                context.account_name,
+                config.get("conf_uid"),
+            )
+        ]
         await websocket.send_text(
             json.dumps({"type": "config-files", "configs": config_files})
         )
@@ -535,7 +555,124 @@ class WebSocketHandler:
         config_file_name = data.get("file")
         if config_file_name:
             context = self.client_contexts[client_uid]
+            selected_config = next(
+                (
+                    config
+                    for config in scan_config_alts_directory(
+                        context.system_config.config_alts_dir
+                    )
+                    if config.get("filename") == config_file_name
+                ),
+                None,
+            )
+            if selected_config and not account_can_access_character(
+                context.account_name,
+                selected_config.get("conf_uid"),
+            ):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "当前账号无法使用该角色",
+                        }
+                    )
+                )
+                return
             await context.handle_config_switch(websocket, config_file_name)
+            await self._send_character_greeting(websocket, context)
+
+    @staticmethod
+    def _is_valid_wav(path: Path) -> bool:
+        """Return whether a persisted greeting has a basic WAV signature."""
+        try:
+            with path.open("rb") as audio_file:
+                header = audio_file.read(12)
+        except OSError:
+            return False
+        return (
+            len(header) == 12
+            and header[:4] == b"RIFF"
+            and header[8:12] == b"WAVE"
+        )
+
+    async def _get_or_create_character_greeting(
+        self,
+        context: ServiceContext,
+    ) -> Path:
+        """Persist one welcome-message recording per CS account and character."""
+        voice = context.get_current_tts_voice()
+        greeting_filename = (
+            f"welcome_message_{voice}.wav" if voice else _GREETING_AUDIO_FILENAME
+        )
+        target_path = (
+            context.history_root
+            / context.character_config.conf_uid
+            / _GREETING_AUDIO_DIR
+            / greeting_filename
+        )
+        lock_key = str(target_path.resolve())
+        lock = self._greeting_audio_locks.setdefault(lock_key, asyncio.Lock())
+
+        async with lock:
+            if self._is_valid_wav(target_path):
+                return target_path
+
+            welcome_message = context.character_config.welcome_message.strip()
+            if not welcome_message:
+                raise ValueError("The active character has no welcome message")
+            if context.tts_engine is None:
+                raise RuntimeError("The active character has no TTS engine")
+
+            generated_path: Path | None = None
+            try:
+                generated_path = Path(
+                    await context.tts_engine.async_generate_audio(
+                        text=welcome_message,
+                        file_name_no_ext=(
+                            f"welcome_{context.character_config.conf_uid}_"
+                            f"{context.client_uid}"
+                        ),
+                    )
+                )
+                if not self._is_valid_wav(generated_path):
+                    raise ValueError("TTS generated an invalid welcome-message WAV")
+
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(generated_path, target_path)
+                generated_path = None
+                logger.info(
+                    "Persisted CS character greeting for account={} character={} at {}",
+                    context.account_name,
+                    context.character_config.conf_uid,
+                    target_path,
+                )
+                return target_path
+            finally:
+                if generated_path is not None and generated_path.exists():
+                    context.tts_engine.remove_file(str(generated_path), verbose=False)
+
+    async def _send_character_greeting(
+        self,
+        websocket: WebSocket,
+        context: ServiceContext,
+    ) -> None:
+        """Auto-play the selected character's stored greeting for CS accounts."""
+        if not context.isolated_conversation_context:
+            return
+
+        try:
+            audio_path = await self._get_or_create_character_greeting(context)
+            payload = prepare_audio_payload(audio_path=str(audio_path))
+            await websocket.send_text(json.dumps(payload))
+        except Exception as exc:
+            # Greeting audio is an enhancement to a successful character switch;
+            # a missing key or TTS outage must not roll the switch back.
+            logger.warning(
+                "Unable to prepare CS character greeting for account={} character={}: {}",
+                context.account_name,
+                context.character_config.conf_uid,
+                exc,
+            )
 
     async def _handle_set_tts_voice(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
@@ -1005,6 +1142,7 @@ class WebSocketHandler:
                     "conf_name": context.character_config.conf_name,
                     "conf_uid": context.character_config.conf_uid,
                     "expression_dir": context.character_config.expression_dir,
+                    "tts_voice": context.get_current_tts_voice(),
                 }
             )
         )

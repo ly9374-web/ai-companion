@@ -2,6 +2,8 @@ import { ReactNode } from 'react';
 
 export const optionalFeature = {
   consumeForUserMessage: (): Record<string, unknown> | null => null,
+  requestHeartRateForNextMessage: (): void => {},
+  clearHeartRateRequest: (): void => {},
   beginProactiveSpeak: (): void => {},
   onConversationStart: (): void => {},
   onConversationEnd: (): void => {},

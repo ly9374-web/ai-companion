@@ -10,6 +10,7 @@ import {
   GROK_API_KEY_STORAGE_KEY,
   isGrokEnabledForPageSession,
   QWEN_API_KEY_STORAGE_KEY,
+  REPLICATE_API_KEY_STORAGE_KEY,
   setGrokEnabledForPageSession,
 } from '@/constants/api-keys';
 import { InputField, SelectField, SwitchField } from './common';
@@ -26,6 +27,7 @@ interface ApiKeySettings {
   grokApiKey: string;
   grokEnabled: boolean;
   qwenApiKey: string;
+  replicateApiKey: string;
 }
 
 const deepseekModels = createListCollection({
@@ -63,6 +65,10 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
     localStorage.setItem(
       QWEN_API_KEY_STORAGE_KEY,
       JSON.stringify(settings.qwenApiKey.trim()),
+    );
+    localStorage.setItem(
+      REPLICATE_API_KEY_STORAGE_KEY,
+      JSON.stringify(settings.replicateApiKey.trim()),
     );
     setGrokEnabledForPageSession(settings.grokEnabled);
     setOriginalSettings(settings);
@@ -137,6 +143,16 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
           qwenApiKey,
         }))}
         placeholder={t('settings.key.qwenPlaceholder')}
+      />
+      <InputField
+        label={t('settings.key.replicate')}
+        value={settings.replicateApiKey}
+        onChange={(replicateApiKey) => setSettings((current) => ({
+          ...current,
+          replicateApiKey,
+        }))}
+        placeholder={t('settings.key.replicatePlaceholder')}
+        type="password"
       />
     </Stack>
   );

@@ -840,6 +840,14 @@ export class EmotionTracker {
     };
   }
 
+  // 最近一次有效心率；超过 maxAgeMs 视为过期（如面部丢失/摄像头停止），返回 null。
+  getLatestHeartRate(maxAgeMs = 5000) {
+    if (!this.latestHeartRate) return null;
+    const age = performance.now() - this.latestHeartRate.at;
+    if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return null;
+    return { bpm: Math.round(this.latestHeartRate.bpm), at: this.latestHeartRate.at };
+  }
+
   consumeWindow() {
     if (!this.baselineAu) {
       this.windowRequested = false;

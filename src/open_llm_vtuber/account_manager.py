@@ -34,6 +34,10 @@ _MIGRATION_CONFLICT_DIR = ".migration-conflicts"
 _PASSWORD_ITERATIONS = 210_000
 _MAX_PERSISTENT_SESSIONS = 10
 _CONVERSATION_STARTERS_FEATURE = "conversation_starters_v1"
+_LIYA_CHARACTER_UID = "generated_16ae7cf0a52e4212a8da18ac89cd4ab6"
+_STANDARD_ACCOUNT_ONLY_CHARACTER_UIDS = frozenset(
+    {_LIYA_CHARACTER_UID}
+)
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -138,13 +142,27 @@ def account_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
-def isolates_conversation_context(account_name: object) -> bool:
-    """Return whether an account must use only its active conversation context."""
+def is_cs_account(account_name: object) -> bool:
+    """Return whether an account uses the special ``cs`` account mode."""
     try:
         normalized = normalize_account_name(account_name)
     except InvalidAccountName:
         return False
     return account_key(normalized).endswith("cs")
+
+
+def isolates_conversation_context(account_name: object) -> bool:
+    """Return whether an account must use only its active conversation context."""
+    return is_cs_account(account_name)
+
+
+def account_can_access_character(account_name: object, conf_uid: object) -> bool:
+    """Return whether an account may discover and select a character."""
+    if not is_cs_account(account_name):
+        return True
+    if not isinstance(conf_uid, str):
+        return True
+    return account_key(conf_uid) not in _STANDARD_ACCOUNT_ONLY_CHARACTER_UIDS
 
 
 def get_account_history_root(account_name: str) -> Path:

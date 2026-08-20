@@ -104,6 +104,7 @@ interface RuntimeFeature {
   cancelCalibration: () => void;
   useGenericProfile: () => void;
   deleteActiveProfile: () => RuntimeActionResult;
+  getLatestHeartRate?: () => { bpm: number; at: number } | null;
 }
 
 interface CameraState {
@@ -231,6 +232,8 @@ let runtime: RuntimeFeature | null = null;
 let loadPromise: Promise<void> | null = null;
 let featureAvailable = false;
 let proactiveSpeakPending = false;
+// 一次性标记：按 j 后，下一条用户消息附带发送时刻的心率。
+let heartRateRequested = false;
 const availabilityListeners = new Set<(available: boolean) => void>();
 
 function publishAvailability(available: boolean) {
@@ -266,8 +269,23 @@ void ensureLoaded();
 export const optionalFeature = {
   consumeForUserMessage(): Record<string, unknown> | null {
     proactiveSpeakPending = false;
+    const heartRateRequestedNow = heartRateRequested;
+    heartRateRequested = false;
+    // 读取发送时刻的心率（5 秒内有效），与窗口聚合相互独立。
+    const requestedHeartRate = heartRateRequestedNow
+      ? runtime?.getLatestHeartRate?.() || null
+      : null;
     const aggregate = runtime?.consumeWindow() || null;
-    return aggregate ? { camera_emotion: aggregate } : null;
+    if (!aggregate && !requestedHeartRate) return null;
+    const cameraEmotion: Record<string, unknown> = { ...(aggregate || {}) };
+    if (requestedHeartRate) cameraEmotion.requested_heart_rate_bpm = requestedHeartRate.bpm;
+    return { camera_emotion: cameraEmotion };
+  },
+  requestHeartRateForNextMessage() {
+    heartRateRequested = true;
+  },
+  clearHeartRateRequest() {
+    heartRateRequested = false;
   },
   beginProactiveSpeak() {
     proactiveSpeakPending = true;
