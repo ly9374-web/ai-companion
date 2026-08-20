@@ -394,6 +394,26 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         });
         break;
       }
+      case 'system-prompt':
+        // Backend returned the editable system prompt section (or an error).
+        window.dispatchEvent(new CustomEvent('system-prompt', { detail: {
+          content: message.content,
+          error: message.error,
+        }}));
+        break;
+      case 'system-prompt-updated':
+        window.dispatchEvent(new CustomEvent('system-prompt-updated', { detail: {
+          success: message.success,
+          error: message.error,
+        }}));
+        break;
+      case 'system-prompt-reset':
+        window.dispatchEvent(new CustomEvent('system-prompt-reset', { detail: {
+          success: message.success,
+          content: message.content,
+          error: message.error,
+        }}));
+        break;
       case 'backend-synth-complete':
         setBackendSynthComplete(true);
         break;

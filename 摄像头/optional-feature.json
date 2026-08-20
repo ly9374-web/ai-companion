@@ -1,6 +1,6 @@
 {
   "id": "camera",
-  "version": 11,
+  "version": 18,
   "backend_entry": "backend_context.py",
   "frontend_entry": "frontend/index.js",
   "electron_mac_usage_descriptions": {
@@ -9,7 +9,7 @@
   "config": {
     "server_url": "ws://127.0.0.1:8765/ws",
     "fps": 12,
-    "jpeg_quality": 0.7,
+    "jpeg_quality": 0.78,
     "max_result_age_ms": 2500,
     "max_buffered_bytes": 65536
   }

@@ -1,8 +1,8 @@
 [project]
 name = "open-llm-vtuber"
 version = "1.2.1"
-description = "Open-LLM-VTuber simplified version — DeepSeek + Qwen TTS + Sherpa-ONNX ASR"
-requires-python = ">=3.11,<3.14"
+description = "Open-LLM-VTuber ai陪伴 — DeepSeek + Qwen TTS + Sherpa-ONNX ASR"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "aiohttp>=3.10.0",
     "chardet>=5.2.0",

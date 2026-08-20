@@ -34,6 +34,6 @@ if [ -n "$LISTENER_PIDS" ]; then
     echo ""
 fi
 
-echo "启动 Open-LLM-VTuber 简化版本..."
+echo "启动 Open-LLM-VTuber ai陪伴..."
 echo ""
 ./run.sh

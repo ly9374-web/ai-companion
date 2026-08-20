@@ -9,7 +9,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import chromadb
 import jieba
@@ -17,7 +17,9 @@ import numpy as np
 from chromadb.config import Settings
 from loguru import logger
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +82,12 @@ class MemoryRagStore:
                 raise FileNotFoundError(
                     f"Bundled RAG embedding model is missing: {MODEL_PATH}"
                 )
+            # sentence-transformers imports transformers, whose package setup
+            # scans thousands of model source files. Keep that expensive work
+            # out of the server's startup path and pay it only when vector RAG
+            # is actually used.
+            from sentence_transformers import SentenceTransformer
+
             logger.info("Loading bundled RAG embedding model from {}", MODEL_PATH)
             self._model = SentenceTransformer(
                 str(MODEL_PATH),

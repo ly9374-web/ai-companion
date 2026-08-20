@@ -50,8 +50,9 @@ export class AieWebSocketClient {
             });
           }
           if (message.type === 'connected') {
+            // 与参考实现对齐：连接后只发 JPEG 帧，不发控制指令。
+            // 云端收到 start_detection 后可能进入不产出 rPPG 心率的管线。
             this.ready = true;
-            socket.send(JSON.stringify({ type: 'control', action: 'start_detection' }));
             this.onStatus('authenticated', {});
           } else if (message.type === 'error') {
             this.ready = false;
@@ -130,16 +131,7 @@ export class AieWebSocketClient {
     this.reconnectTimer = null;
     const socket = this.socket;
     this.socket = null;
-    if (socket) {
-      if (socket.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(JSON.stringify({ type: 'control', action: 'stop_detection' }));
-        } catch (_error) {
-          // Best-effort shutdown only.
-        }
-      }
-      socket.close();
-    }
+    if (socket) socket.close();
     this.onConnectionLost(null);
   }
 }

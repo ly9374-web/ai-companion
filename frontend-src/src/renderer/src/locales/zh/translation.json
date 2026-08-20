@@ -4,7 +4,19 @@
     "cancel": "取消",
     "settings": "设置",
     "close": "关闭",
-    "accept": "接受"
+    "accept": "接受",
+    "confirm": "确定"
+  },
+  "systemPrompt": {
+    "title": "当前角色 system prompt",
+    "reset": "恢复默认",
+    "resetConfirm": "确定恢复为默认 system prompt？",
+    "loading": "加载中…",
+    "updateSuccess": "system prompt 已更新，下一轮对话生效",
+    "updateFailed": "system prompt 更新失败",
+    "resetSuccess": "已恢复为默认 system prompt",
+    "resetFailed": "恢复默认失败",
+    "fetchFailed": "加载 system prompt 失败"
   },
   "account": {
     "login": "登录",
@@ -60,7 +72,9 @@
       "maxHistoryTurnsHelp": "每次请求模型时带入的已完成用户-AI对话轮数，当前消息会另外加入。范围为1-100，默认为8。",
       "debugMode": "调试",
       "debugModeHelp": "开启后，聊天和滚动摘要仍会正常保存、触发并插入，但不会调用长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这三类总结。",
-      "rollingSummary": "滚动摘要"
+      "rollingSummary": "滚动摘要",
+      "emotionSegmentMinMs": "表情段最小时长(ms)",
+      "emotionSegmentMinMsHelp": "单段表情连续持续不足此时长则不计入本轮输出（中性段不受此限制）。调小则更多短暂表情被保留，调大则只保留持续较久的表情。范围0-10000，默认1500。"
     },
     "tts": {
       "backgroundImage": "背景图片",
@@ -181,5 +195,11 @@
     "connected": "已连接",
     "connecting": "连接中",
     "clickToReconnect": "点击重新连接"
+  },
+  "cameraInvite": {
+    "title": "开启摄像头？",
+    "description": "检测到当前账号支持表情识别，是否立即打开摄像头采集你的表情基线？",
+    "confirm": "开启摄像头",
+    "cancel": "取消"
   }
 }

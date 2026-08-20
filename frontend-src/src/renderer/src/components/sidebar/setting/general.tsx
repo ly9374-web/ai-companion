@@ -20,6 +20,11 @@ import {
   setGeneralRuntimeSettings,
 } from "@/constants/general-runtime-settings";
 import { useAccount } from "@/context/account-context";
+import { optionalFeature } from "@optional-feature";
+
+const EMOTION_SEGMENT_MIN_MS_MIN = 0;
+const EMOTION_SEGMENT_MIN_MS_MAX = 10000;
+const EMOTION_SEGMENT_ACCOUNT_SUFFIX = 'cs';
 
 interface GeneralProps {
   onSave?: (callback: () => void) => () => void;
@@ -79,6 +84,15 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     initialRuntimeSettings.generateAudio,
   );
   const [debugMode, setDebugMode] = useState(initialRuntimeSettings.debugMode);
+  const { account } = useAccount();
+  const isEmotionSegmentAccount = Boolean(account)
+    && account!.toLowerCase().endsWith(EMOTION_SEGMENT_ACCOUNT_SUFFIX);
+  const [emotionSegmentMinMs, setEmotionSegmentMinMs] = useState(
+    () => optionalFeature.getEmotionSegmentMinMs(),
+  );
+  const emotionSegmentMinMsRef = useRef(emotionSegmentMinMs);
+  emotionSegmentMinMsRef.current = emotionSegmentMinMs;
+  const savedEmotionSegmentMinMsRef = useRef(emotionSegmentMinMs);
   const runtimeSettingsRef = useRef({ generateAudio, debugMode });
   const savedRuntimeSettingsRef = useRef(initialRuntimeSettings);
   runtimeSettingsRef.current = { generateAudio, debugMode };
@@ -99,6 +113,18 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     }
   };
 
+  const handleEmotionSegmentMinMsChange = (value: string): void => {
+    const ms = Number.parseInt(value, 10);
+    if (
+      !Number.isNaN(ms)
+      && ms >= EMOTION_SEGMENT_MIN_MS_MIN
+      && ms <= EMOTION_SEGMENT_MIN_MS_MAX
+    ) {
+      setEmotionSegmentMinMs(ms);
+      optionalFeature.setEmotionSegmentMinMs(ms);
+    }
+  };
+
   useEffect(() => {
     if (!onSave || !onCancel) return undefined;
 
@@ -106,11 +132,15 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
       const nextSettings = runtimeSettingsRef.current;
       savedRuntimeSettingsRef.current = nextSettings;
       setGeneralRuntimeSettings(nextSettings);
+      savedEmotionSegmentMinMsRef.current = emotionSegmentMinMsRef.current;
     });
     const removeCancel = onCancel(() => {
       const savedSettings = savedRuntimeSettingsRef.current;
       setGenerateAudio(savedSettings.generateAudio);
       setDebugMode(savedSettings.debugMode);
+      const savedMs = savedEmotionSegmentMinMsRef.current;
+      setEmotionSegmentMinMs(savedMs);
+      optionalFeature.setEmotionSegmentMinMs(savedMs);
       if (wsState === "OPEN") {
         sendMessage({
           type: "set-generate-audio",
@@ -257,6 +287,19 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         onChange={handleDebugModeChange}
         help={t("settings.general.debugModeHelp")}
       />
+
+      {isEmotionSegmentAccount && (
+        <NumberField
+          label={t("settings.general.emotionSegmentMinMs")}
+          value={emotionSegmentMinMs}
+          onChange={handleEmotionSegmentMinMsChange}
+          min={EMOTION_SEGMENT_MIN_MS_MIN}
+          max={EMOTION_SEGMENT_MIN_MS_MAX}
+          step={100}
+          allowMouseWheel
+          help={t("settings.general.emotionSegmentMinMsHelp")}
+        />
+      )}
 
       {debugMode && (
         <Button colorPalette="blue" onClick={handleRollingSummary}>

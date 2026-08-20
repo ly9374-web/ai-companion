@@ -4,7 +4,19 @@
     "cancel": "Cancel",
     "settings": "Settings",
     "close": "Close",
-    "accept": "Accept"
+    "accept": "Accept",
+    "confirm": "Confirm"
+  },
+  "systemPrompt": {
+    "title": "Current character system prompt",
+    "reset": "Reset to default",
+    "resetConfirm": "Restore the default system prompt?",
+    "loading": "Loading…",
+    "updateSuccess": "System prompt updated, takes effect next turn",
+    "updateFailed": "Failed to update system prompt",
+    "resetSuccess": "Restored to default system prompt",
+    "resetFailed": "Failed to reset system prompt",
+    "fetchFailed": "Failed to load system prompt"
   },
   "account": {
     "login": "Log in",
@@ -60,7 +72,9 @@
       "maxHistoryTurnsHelp": "Number of completed user-assistant turns included as context in each model request. The current message is added separately. Range: 1-100; default: 8.",
       "debugMode": "Debug",
       "debugModeHelp": "When enabled, chats and rolling summaries are still saved, triggered, and injected, but long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be added to those three summaries later after debug mode is disabled.",
-      "rollingSummary": "Rolling Summary"
+      "rollingSummary": "Rolling Summary",
+      "emotionSegmentMinMs": "Min Expression Segment (ms)",
+      "emotionSegmentMinMsHelp": "A continuous expression segment shorter than this is excluded from the turn output (neutral segments are exempt). Lower values retain more brief expressions; higher values keep only sustained ones. Range 0-10000; default 1500."
     },
     "tts": {
       "backgroundImage": "Background Image",
@@ -181,5 +195,11 @@
     "connected": "Connected",
     "connecting": "Connecting",
     "clickToReconnect": "Click to Reconnect"
+  },
+  "cameraInvite": {
+    "title": "Enable Camera?",
+    "description": "This account supports emotion recognition. Open the camera now to capture your expression baseline?",
+    "confirm": "Enable Camera",
+    "cancel": "Cancel"
   }
 }

@@ -42,6 +42,9 @@ from .account_manager import (
     get_account_history_root,
     has_conversation_starters,
     isolates_conversation_context,
+    read_system_prompt_override,
+    write_system_prompt_override,
+    delete_system_prompt_override,
 )
 from .long_term_memory_manager import LongTermMemoryManager
 from .long_term_relationship_manager import LongTermRelationshipManager
@@ -645,7 +648,12 @@ class ServiceContext:
         """Initialize or update the LLM engine based on agent configuration."""
         logger.info(f"Initializing Agent: {agent_config.conversation_agent_choice}")
 
-        system_prompt = await self.construct_system_prompt(persona_prompt)
+        # When an account-level override exists, use the override-aware composed
+        # prompt so the very first agent initialization already respects it.
+        if self.account_name and self.character_config and self.live2d_model:
+            _editable, _fixed, system_prompt = self._compose_effective_system_prompt()
+        else:
+            system_prompt = await self.construct_system_prompt(persona_prompt)
 
         if (
             self.agent_engine is not None
@@ -708,6 +716,129 @@ class ServiceContext:
 
     # ==== utils
 
+    _FIXED_SECTION_MARKER = "#声音效果与表情"
+
+    @staticmethod
+    def _split_editable_and_fixed(system_prompt: str) -> tuple[str, str]:
+        """Split a rendered system prompt into editable and fixed sections.
+
+        The ``#声音效果与表情`` marker and everything after it is treated as the
+        fixed section (it contains the emomap placeholders and the emotion
+        output rules that must stay in sync with the live2d model). Everything
+        before the marker is the editable persona section.
+        """
+        marker = ServiceContext._FIXED_SECTION_MARKER
+        index = system_prompt.find(marker)
+        if index == -1:
+            return system_prompt.strip(), ""
+        return system_prompt[:index].strip(), system_prompt[index:].strip()
+
+    def _resolve_account_and_conf_uid(self) -> tuple[str, str]:
+        if not self.account_name:
+            raise RuntimeError("No active account bound to this service context")
+        if not self.character_config:
+            raise RuntimeError("No active character config")
+        return self.account_name, self.character_config.conf_uid
+
+    def _read_override(self) -> str | None:
+        account, conf_uid = self._resolve_account_and_conf_uid()
+        return read_system_prompt_override(account, conf_uid)
+
+    def _render_default_system_prompt(self) -> str:
+        """Render the default system prompt from the active character template."""
+        persona_prompt = self.resolve_persona_prompt(self.character_config)
+        rendered = prompt_builder.render_character_system_prompt(
+            persona_prompt,
+            emomap_keys=self.live2d_model.emo_str,
+        )
+        return rendered.strip()
+
+    def _compose_effective_system_prompt(self) -> tuple[str, str, str]:
+        """Return (editable, fixed, full) for the active character.
+
+        When an override exists the editable section comes from the override
+        file and the fixed section is still taken from the default template so
+        that emomap/emotion rules stay in sync with the live2d model.
+        """
+        default_prompt = self._render_default_system_prompt()
+        default_editable, default_fixed = self._split_editable_and_fixed(default_prompt)
+
+        override = self._read_override()
+        if override is not None and override.strip():
+            editable = override.strip()
+        else:
+            editable = default_editable
+
+        if default_fixed:
+            full = f"{editable}\n\n{default_fixed}"
+        else:
+            full = editable
+        return editable, default_fixed, full
+
+    def get_editable_system_prompt(self) -> str:
+        """Return the editable system prompt section for the frontend editor."""
+        if self.character_config is None or self.live2d_model is None:
+            raise RuntimeError("Character config or Live2D model not loaded")
+        editable, _fixed, _full = self._compose_effective_system_prompt()
+        return editable
+
+    def set_system_prompt_override(self, content: str) -> str:
+        """Persist the edited editable section and apply it to the agent.
+
+        Returns the new full system prompt that the agent will use.
+        """
+        if self.character_config is None or self.live2d_model is None:
+            raise RuntimeError("Character config or Live2D model not loaded")
+        if self.agent_engine is None:
+            raise RuntimeError("Cannot update system prompt without an active agent")
+        account, conf_uid = self._resolve_account_and_conf_uid()
+
+        editable = content.strip()
+        write_system_prompt_override(account, conf_uid, editable)
+
+        _editable, fixed, full = self._compose_effective_system_prompt()
+        set_system = getattr(self.agent_engine, "set_system", None)
+        if not callable(set_system):
+            raise RuntimeError(
+                "The active conversation agent cannot update its system prompt"
+            )
+        set_system(full)
+        self.system_prompt = full
+        logger.info(
+            "Updated system prompt override for {} ({})",
+            self.character_config.conf_name,
+            conf_uid,
+        )
+        return full
+
+    def reset_system_prompt_override(self) -> str:
+        """Remove the override file and restore the default system prompt.
+
+        Returns the default editable section so the frontend can refresh.
+        """
+        if self.character_config is None or self.live2d_model is None:
+            raise RuntimeError("Character config or Live2D model not loaded")
+        if self.agent_engine is None:
+            raise RuntimeError("Cannot update system prompt without an active agent")
+        account, conf_uid = self._resolve_account_and_conf_uid()
+
+        delete_system_prompt_override(account, conf_uid)
+
+        editable, _fixed, full = self._compose_effective_system_prompt()
+        set_system = getattr(self.agent_engine, "set_system", None)
+        if not callable(set_system):
+            raise RuntimeError(
+                "The active conversation agent cannot update its system prompt"
+            )
+        set_system(full)
+        self.system_prompt = full
+        logger.info(
+            "Reset system prompt override for {} ({})",
+            self.character_config.conf_name,
+            conf_uid,
+        )
+        return editable
+
     async def construct_system_prompt(self, persona_prompt: str) -> str:
         """Render the role's complete YAML system prompt."""
         logger.debug("Rendering complete character system prompt from prompts.yaml")
@@ -730,6 +861,10 @@ class ServiceContext:
         long-running server or browser session from continuing to use a prompt
         that has since been edited on disk.
 
+        When an account-level system prompt override exists, the editable
+        section is taken from the override file and only the fixed section
+        (emomap + emotion rules) is reloaded from the default template.
+
         Returns:
             ``True`` when the active agent was updated, otherwise ``False``.
         """
@@ -738,16 +873,16 @@ class ServiceContext:
         if self.live2d_model is None:
             raise RuntimeError("Cannot refresh system prompt without Live2D model")
 
-        persona_prompt = self.resolve_persona_prompt(self.character_config)
-        system_prompt = await self.construct_system_prompt(persona_prompt)
+        _editable, _fixed, full = self._compose_effective_system_prompt()
 
-        if (
-            persona_prompt == self.persona_prompt
-            and system_prompt == self.system_prompt
-        ):
+        if full == self.system_prompt:
             return False
 
         if self.agent_engine is None:
+            # Re-run the normal init path so persona_prompt/system_prompt stay
+            # consistent; the override will be picked up by init_agent via
+            # _compose_effective_system_prompt again.
+            persona_prompt = self.resolve_persona_prompt(self.character_config)
             await self.init_agent(
                 self.character_config.agent_config,
                 persona_prompt,
@@ -758,9 +893,8 @@ class ServiceContext:
                 raise RuntimeError(
                     "The active conversation agent cannot update its system prompt"
                 )
-            set_system(system_prompt)
-            self.persona_prompt = persona_prompt
-            self.system_prompt = system_prompt
+            set_system(full)
+            self.system_prompt = full
 
         logger.info(
             "Reloaded character system prompt for {} ({})",

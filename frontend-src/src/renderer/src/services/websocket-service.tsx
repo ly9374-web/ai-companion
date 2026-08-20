@@ -105,6 +105,10 @@ export interface MessageEvent {
     wsUrl: string;
     sessionId?: string;
   };
+  // System prompt editor: editable section sent from backend, plus success/error
+  // flags for update/reset responses.
+  content?: string;
+  error?: string;
 }
 
 // Get translation function for error messages
@@ -260,6 +264,19 @@ class WebSocketService {
         duration: 2000,
       });
     }
+  }
+
+  // ==== System prompt editor ====
+  fetchSystemPrompt() {
+    this.sendMessage({ type: 'fetch-system-prompt' });
+  }
+
+  updateSystemPrompt(content: string) {
+    this.sendMessage({ type: 'update-system-prompt', content });
+  }
+
+  resetSystemPrompt() {
+    this.sendMessage({ type: 'reset-system-prompt' });
   }
 
   onMessage(callback: (message: MessageEvent) => void) {

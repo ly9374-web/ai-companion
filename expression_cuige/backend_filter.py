@@ -55,6 +55,21 @@ def _strip_protocol(text: str, pattern: re.Pattern[str]) -> tuple[str, str | Non
     return text[: match.start()].rstrip(), match.group("emotion")
 
 
+# Inline tone/annotation markers wrapped in ASCII square brackets, e.g.
+# [gasp], [sighing], [clears throat], [giggles], [laughing]. These are stripped
+# from the display text only; tts_text keeps them as emotional cues for TTS.
+_BRACKET_MARKER_PATTERN = re.compile(r"\[[^\[\]]*\]")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+
+
+def _strip_bracket_markers(text: str) -> str:
+    """Remove ASCII ``[...]`` tone markers from text shown in the UI."""
+    if not isinstance(text, str):
+        return text
+    cleaned = _BRACKET_MARKER_PATTERN.sub("", text)
+    return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+
+
 def process_output(display_text: str, tts_text: str) -> dict[str, Any]:
     """Hide the trailing protocol and return a safe, supported emotion."""
     allowed_emotions = _allowed_emotions()
@@ -62,6 +77,9 @@ def process_output(display_text: str, tts_text: str) -> dict[str, Any]:
 
     cleaned_display, display_emotion = _strip_protocol(display_text, pattern)
     cleaned_tts, tts_emotion = _strip_protocol(tts_text, pattern)
+    # Strip inline [tone] markers from display only; keep them in tts_text so
+    # the synthesis engine can still use them as emotional cues.
+    cleaned_display = _strip_bracket_markers(cleaned_display)
     raw_emotion = display_emotion or tts_emotion
     emotion = raw_emotion if raw_emotion in allowed_emotions else None
     if raw_emotion is not None and emotion is None:

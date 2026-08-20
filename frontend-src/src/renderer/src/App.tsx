@@ -31,6 +31,7 @@ import { useSpaceToTalk } from "./hooks/utils/use-space-to-talk";
 import { useManualSummary } from "./hooks/utils/use-manual-summary";
 import { AccountProvider, useAccount } from "./context/account-context";
 import LoginScreen from "./components/account/login-screen";
+import { CameraInviteDialog } from "./components/account/camera-invite-dialog";
 
 function AppContent(): JSX.Element {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -173,6 +174,7 @@ function AppWithGlobalStyles(): JSX.Element {
   return (
     <Box key={account}>
       <OptionalFeatureProvider>
+        <CameraInviteDialog />
         <ScreenCaptureProvider>
           <CharacterConfigProvider>
             <ChatHistoryProvider>

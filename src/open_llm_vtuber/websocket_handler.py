@@ -51,6 +51,7 @@ class WSMessage(TypedDict, total=False):
     qwen_api_key: Optional[str]
     optional_contexts: Optional[dict]
     quick_start_topic: Optional[str]
+    content: Optional[str]
 
 
 class WebSocketHandler:
@@ -92,6 +93,9 @@ class WebSocketHandler:
             "summarize-rolling-context": self._handle_debug_rolling_summary,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
+            "fetch-system-prompt": self._handle_fetch_system_prompt,
+            "update-system-prompt": self._handle_update_system_prompt,
+            "reset-system-prompt": self._handle_reset_system_prompt,
             "heartbeat": self._handle_heartbeat,
         }
 
@@ -845,6 +849,86 @@ class WebSocketHandler:
         self.client_contexts[client_uid].debug_mode = enabled
         await websocket.send_text(
             json.dumps({"type": "debug-mode-updated", "enabled": enabled})
+        )
+
+    async def _handle_fetch_system_prompt(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Return the editable section of the active character's system prompt."""
+        context = self.client_contexts[client_uid]
+        try:
+            content = context.get_editable_system_prompt()
+        except Exception as exc:
+            logger.error("Failed to fetch editable system prompt: {}", exc)
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "system-prompt",
+                        "error": str(exc),
+                    }
+                )
+            )
+            return
+        await websocket.send_text(
+            json.dumps({"type": "system-prompt", "content": content})
+        )
+
+    async def _handle_update_system_prompt(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Persist the edited editable section and apply it to the agent."""
+        content = data.get("content")
+        if not isinstance(content, str):
+            raise ValueError("content must be a string")
+        if not content.strip():
+            raise ValueError("content cannot be empty")
+
+        context = self.client_contexts[client_uid]
+        try:
+            context.set_system_prompt_override(content)
+        except Exception as exc:
+            logger.error("Failed to update system prompt override: {}", exc)
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "system-prompt-updated",
+                        "success": False,
+                        "error": str(exc),
+                    }
+                )
+            )
+            return
+        await websocket.send_text(
+            json.dumps({"type": "system-prompt-updated", "success": True})
+        )
+
+    async def _handle_reset_system_prompt(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Remove the override file and restore the default system prompt."""
+        context = self.client_contexts[client_uid]
+        try:
+            default_content = context.reset_system_prompt_override()
+        except Exception as exc:
+            logger.error("Failed to reset system prompt override: {}", exc)
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "system-prompt-reset",
+                        "success": False,
+                        "error": str(exc),
+                    }
+                )
+            )
+            return
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "system-prompt-reset",
+                    "success": True,
+                    "content": default_content,
+                }
+            )
         )
 
     async def _handle_set_max_history_turns(

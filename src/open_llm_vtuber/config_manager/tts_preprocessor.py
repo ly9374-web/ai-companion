@@ -12,7 +12,7 @@ class TranslatorConfig(I18nMixin):
     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
         "translate_audio": Description(
             en="Enable audio translation (disabled in simplified version)",
-            zh="启用音频翻译（简化版本中已禁用）",
+            zh="启用音频翻译（ai陪伴中已禁用）",
         ),
     }
 
@@ -36,6 +36,6 @@ class TTSPreprocessorConfig(I18nMixin):
         ),
         "translator_config": Description(
             en="Translation configuration (disabled in simplified version)",
-            zh="翻译配置（简化版本中已禁用）",
+            zh="翻译配置（ai陪伴中已禁用）",
         ),
     }

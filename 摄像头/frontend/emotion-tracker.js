@@ -1,18 +1,31 @@
 import { RAW_EMOTION_MODEL } from './emotion-model.js';
+import { sanitizeRuntimeSettings } from './emotion-profile-store.js';
 
 const BASELINE_COUNTDOWN_MS = 3000;
 const BASELINE_WINDOW_MS = 1100;
 const SMOOTHING_WINDOW_MS = 550;
 const EXPRESSION_STABILITY_MS = 280;
 const AMBIGUOUS_STABILITY_MS = 360;
-const NEUTRAL_STABILITY_MS = 450;
-const MINIMUM_SIGNAL_NORM = 0.12;
-const MINIMUM_EMOTION_SIMILARITY = 0.75;
+const NEUTRAL_STABILITY_MS = 300;
 const MINIMUM_TEMPLATE_SCALE = 0;
 const MAXIMUM_RESIDUAL_RATIO = 1;
 const MINIMUM_EFFECTIVE_AUS = 1;
 const NOISE_MULTIPLIER = 2.5;
 const MINIMUM_NOISE_FLOOR = 0.015;
+
+// 个人基线录入：每种表情确认后采集约 1 秒中值。
+const CALIBRATION_CAPTURE_MS = 1000;
+const CALIBRATION_MINIMUM_FRAMES = 5;
+const CALIBRATION_STEPS = Object.freeze([
+  { label: '中性', prompt: '保持放松', kind: 'neutral' },
+  { label: '悲伤', prompt: '做悲伤表情', kind: 'expression' },
+  { label: '愤怒', prompt: '做愤怒表情', kind: 'expression' },
+  { label: '惊讶', prompt: '做惊讶表情', kind: 'expression' },
+  { label: '开心', prompt: '做开心表情', kind: 'expression' },
+]);
+
+// 心率窗口最少有效样本数（云端约 3 次/秒），不足则不参与 prompt 拼接。
+const WINDOW_HEART_RATE_MINIMUM_SAMPLES = 3;
 
 const INFERRED_EXPRESSION_LABELS = new Set(['愤怒', '开心', '悲伤', '惊讶']);
 const MODEL_LABELS = Object.freeze({
@@ -20,6 +33,12 @@ const MODEL_LABELS = Object.freeze({
   开心: 'happy',
   悲伤: 'sad',
   惊讶: 'surprise',
+});
+const EMOTION_THRESHOLD_SETTINGS = Object.freeze({
+  愤怒: 'emotionThresholdAnger',
+  惊讶: 'emotionThresholdSurprise',
+  悲伤: 'emotionThresholdSadness',
+  开心: 'emotionThresholdHappiness',
 });
 
 // These four additional sadness samples and the class filter mirror the
@@ -133,43 +152,129 @@ function auNumber(label) {
   return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
 }
 
+// ===== 心率提取（移植自 emotion_camera算法支持/static/index.html） =====
+
+const HEART_RATE_KEYS = [
+  'heart_rate', 'heartRate', 'heart_rate_value', 'heartRateValue',
+  'bpm', 'BPM', 'pulse', 'pulse_rate', 'pulseRate', 'hr', 'HR',
+];
+
+// 合理心率范围，用于排除 9999 这类“无数据”占位值。
+const HEART_RATE_MIN = 30;
+const HEART_RATE_MAX = 220;
+
+// 返回 { bpm, valid }；找不到心率字段返回 null。
+function extractHeartRate(data) {
+  if (!data || typeof data !== 'object') return null;
+
+  // 优先处理云端实际的嵌套结构：data.heart_rate.heart_rate
+  const hrGroup = data.heart_rate;
+  if (hrGroup && typeof hrGroup === 'object') {
+    const bpm = Number(hrGroup.heart_rate);
+    if (Number.isFinite(bpm)) {
+      let valid = true;
+      if (typeof hrGroup.heart_rate_is_valid === 'boolean') {
+        valid = hrGroup.heart_rate_is_valid;
+      } else if (typeof hrGroup.heart_rate_status === 'string') {
+        const status = hrGroup.heart_rate_status.toLowerCase();
+        valid = status === 'valid' || status === 'ok';
+      } else {
+        // 没有显式有效性字段时，用合理范围排除占位值
+        valid = bpm >= HEART_RATE_MIN && bpm <= HEART_RATE_MAX;
+      }
+      return { bpm, valid };
+    }
+  }
+
+  // 兼容其他可能的命名 / 嵌套位置
+  const direct = HEART_RATE_KEYS
+    .map((key) => data[key])
+    .find((value) => Number.isFinite(Number(value)));
+  if (direct !== undefined) {
+    const n = Number(direct);
+    if (Number.isFinite(n)) {
+      return { bpm: n, valid: n >= HEART_RATE_MIN && n <= HEART_RATE_MAX };
+    }
+  }
+
+  const nested = ['vitals', 'vital', 'hr', 'heart', 'health', 'physio'];
+  for (const group of nested) {
+    const obj = data[group];
+    if (!obj || typeof obj !== 'object') continue;
+    const inner = HEART_RATE_KEYS
+      .map((key) => obj[key])
+      .find((value) => Number.isFinite(Number(value)));
+    if (inner !== undefined) {
+      const n = Number(inner);
+      if (Number.isFinite(n)) {
+        return { bpm: n, valid: n >= HEART_RATE_MIN && n <= HEART_RATE_MAX };
+      }
+    }
+  }
+  return null;
+}
+
 export class EmotionTracker {
   constructor({
     maxResultAgeMs = 2500,
+    settings = null,
     onLiveEmotion = () => {},
     onAuDeltas = () => {},
     onCalibrationState = () => {},
+    onHeartRate = () => {},
+    onCalibrationProgress = () => {},
+    onCalibrationComplete = () => {},
+    onSegmentState = () => {},
   } = {}) {
     this.maxResultAgeMs = maxResultAgeMs;
+    this.settings = sanitizeRuntimeSettings(settings);
     this.onLiveEmotion = onLiveEmotion;
     this.onAuDeltas = onAuDeltas;
     this.onCalibrationState = onCalibrationState;
+    this.onHeartRate = onHeartRate;
+    this.onCalibrationProgress = onCalibrationProgress;
+    this.onCalibrationComplete = onCalibrationComplete;
+    this.onSegmentState = onSegmentState;
+    this.started = false;
     this.baselineStartedAt = 0;
     this.baselineAu = null;
     this.auNoise = {};
     this.recentAuFrames = [];
+    this.personalClasses = null;
+    this.calibrationSession = null;
+    this.calibrationCaptureTimer = null;
     this.inferenceCandidateKey = '';
     this.inferenceCandidateSince = 0;
     this.stableInference = null;
     this.faceAvailable = false;
+    this.connectionError = false;
     this.latestReceivedAt = 0;
     this.staleTimer = null;
     this.calibrationTimer = null;
+    this.latestHeartRate = null;
     this.windowRequested = false;
     this.windowActive = false;
     this.windowLastUpdatedAt = 0;
     this.windowLastLabels = [];
-    this.windowDurations = {};
-    this.windowEmotionSequence = [];
     this.windowLastInferenceKey = '';
+    this.windowSegments = [];
+    this.windowCurrentSegment = null;
+    this.windowHeartRateSamples = [];
+  }
+
+  applySettings(settings) {
+    this.settings = sanitizeRuntimeSettings(settings);
   }
 
   startCalibration() {
     this.reset();
+    this.started = true;
     this.baselineStartedAt = performance.now();
     this.onCalibrationState({ state: 'countdown', remaining: 3 });
     this.calibrationTimer = window.setInterval(() => {
       if (this.baselineAu) return;
+      if (this.calibrationSession) return;
+      if (this.connectionError) return;
       const elapsed = performance.now() - this.baselineStartedAt;
       if (elapsed < BASELINE_COUNTDOWN_MS) {
         this.onCalibrationState({
@@ -183,10 +288,213 @@ export class EmotionTracker {
     }, 100);
   }
 
+  // 直接以个人档案启动：跳过通用倒计时，使用档案的中性基线与模板。
+  startWithProfile(profile) {
+    this.reset();
+    this.started = true;
+    this.personalClasses = profile.classes;
+    this.baselineAu = { ...profile.neutralAu };
+    this.auNoise = { ...profile.neutralNoiseMad };
+    this.onCalibrationState({ state: 'ready' });
+    if (this.windowRequested) this.startWindow();
+  }
+
+  // 摄像头运行中切换到个人档案。
+  activateProfile(profile) {
+    this.personalClasses = profile.classes;
+    this.baselineAu = { ...profile.neutralAu };
+    this.auNoise = { ...profile.neutralNoiseMad };
+    window.clearInterval(this.calibrationTimer);
+    this.calibrationTimer = null;
+    this.onCalibrationState({ state: 'ready' });
+    if (this.windowRequested && !this.windowActive) this.startWindow();
+    if (this.recentAuFrames.length) {
+      this.updateStableInference(this.smoothedAuUnits(performance.now()), performance.now());
+    }
+  }
+
+  // 摄像头运行中退回通用模板：重新采集通用中性基线。
+  useGenericProfile() {
+    this.personalClasses = null;
+    this.startCalibration();
+  }
+
+  // ===== 个人基线录入状态机 =====
+
+  beginPersonalCalibration(profileKey, displayName) {
+    if (!this.started) return '请先开启摄像头后再录制个人基线。';
+    if (this.calibrationSession) {
+      this.emitCalibrationStep('');
+      return '';
+    }
+    this.calibrationSession = {
+      profileKey,
+      displayName,
+      stepIndex: 0,
+      phase: 'ready',
+      frames: [],
+      neutralAu: null,
+      neutralNoise: {},
+      templates: {},
+    };
+    this.emitCalibrationStep('');
+    return '';
+  }
+
+  hasCalibrationSession() {
+    return this.calibrationSession !== null;
+  }
+
+  // 当前校准步骤的快照；无会话时返回 null（用于订阅方挂载时恢复 UI）。
+  currentCalibrationStep() {
+    if (!this.calibrationSession) return null;
+    const step = CALIBRATION_STEPS[this.calibrationSession.stepIndex];
+    return {
+      state: 'step',
+      stepIndex: this.calibrationSession.stepIndex,
+      total: CALIBRATION_STEPS.length,
+      label: step.label,
+      prompt: step.prompt,
+      kind: step.kind,
+      phase: this.calibrationSession.phase,
+      message: '',
+      displayName: this.calibrationSession.displayName,
+    };
+  }
+
+  emitCalibrationStep(message = '') {
+    const payload = this.currentCalibrationStep();
+    if (!payload) return;
+    this.onCalibrationProgress({ ...payload, message });
+  }
+
+  captureCalibrationStep() {
+    if (!this.calibrationSession || this.calibrationSession.phase !== 'ready') return;
+    if (!this.started) {
+      this.emitCalibrationStep('摄像头未开启，无法录制。');
+      return;
+    }
+    if (!this.faceAvailable) {
+      this.emitCalibrationStep('当前未检测到人脸，请面对摄像头后重试。');
+      return;
+    }
+    if (!this.recentAuFrames.length) {
+      this.emitCalibrationStep('正在等待识别数据，请稍候…');
+      return;
+    }
+    this.calibrationSession.phase = 'capturing';
+    this.calibrationSession.frames = [];
+    this.emitCalibrationStep('请保持当前状态，正在采集 AU…');
+    window.clearTimeout(this.calibrationCaptureTimer);
+    this.calibrationCaptureTimer = window.setTimeout(
+      () => this.finishCalibrationCapture(),
+      CALIBRATION_CAPTURE_MS + 80,
+    );
+  }
+
+  cancelPersonalCalibration() {
+    window.clearTimeout(this.calibrationCaptureTimer);
+    this.calibrationCaptureTimer = null;
+    if (!this.calibrationSession) return;
+    this.calibrationSession = null;
+    this.onCalibrationProgress({ state: 'cancelled' });
+  }
+
+  calibrationVector(units, neutralAu, neutralNoise) {
+    return EMOTION_MODEL.features.map((name) => {
+      const change = Number(units[name] ?? neutralAu[name] ?? 0)
+        - Number(neutralAu[name] ?? units[name] ?? 0);
+      const noiseFloor = Math.max(
+        MINIMUM_NOISE_FLOOR,
+        Number(neutralNoise[name] || 0) * NOISE_MULTIPLIER,
+      );
+      return Number((Math.sign(change) * Math.max(0, Math.abs(change) - noiseFloor)).toFixed(6));
+    });
+  }
+
+  finishCalibrationCapture() {
+    this.calibrationCaptureTimer = null;
+    const session = this.calibrationSession;
+    if (!session || session.phase !== 'capturing') return;
+    session.phase = 'ready';
+    const frames = session.frames;
+    if (frames.length < CALIBRATION_MINIMUM_FRAMES) {
+      this.emitCalibrationStep(
+        `只采到 ${frames.length} 帧有效人脸，请保持正对摄像头后重录。`,
+      );
+      return;
+    }
+
+    const step = CALIBRATION_STEPS[session.stepIndex];
+    const capturedAu = medianAuFrames(frames);
+    if (step.kind === 'neutral') {
+      const noise = Object.fromEntries(Object.keys(capturedAu).map((name) => {
+        const deviations = frames
+          .map((frame) => Number(frame.units[name]))
+          .filter(Number.isFinite)
+          .map((value) => Math.abs(value - capturedAu[name]));
+        return [name, median(deviations)];
+      }));
+      session.neutralAu = capturedAu;
+      session.neutralNoise = noise;
+      this.baselineAu = { ...capturedAu };
+      this.auNoise = { ...noise };
+      this.recentAuFrames = [];
+      this.onCalibrationState({ state: 'ready' });
+    } else {
+      const vector = this.calibrationVector(
+        capturedAu,
+        session.neutralAu,
+        session.neutralNoise,
+      );
+      const activity = vectorNorm(vector);
+      const minimumActivity = Math.max(0.04, this.settings.minimumSignalNorm * 0.6);
+      if (activity < minimumActivity) {
+        this.emitCalibrationStep(
+          `变化量 ${activity.toFixed(3)} 太小，请把${step.label}表情做明显一点后重录。`,
+        );
+        return;
+      }
+      session.templates[step.label] = vector;
+    }
+
+    session.stepIndex += 1;
+    if (session.stepIndex >= CALIBRATION_STEPS.length) {
+      this.finishPersonalCalibration();
+      return;
+    }
+    this.emitCalibrationStep('');
+  }
+
+  finishPersonalCalibration() {
+    const session = this.calibrationSession;
+    if (!session) return;
+    window.clearTimeout(this.calibrationCaptureTimer);
+    this.calibrationCaptureTimer = null;
+    this.calibrationSession = null;
+    const profile = {
+      key: session.profileKey,
+      displayName: session.displayName,
+      modelVersion: EMOTION_MODEL.version,
+      features: [...EMOTION_MODEL.features],
+      neutralAu: session.neutralAu,
+      neutralNoiseMad: session.neutralNoise,
+      classes: Object.fromEntries(CALIBRATION_STEPS
+        .filter((step) => step.kind === 'expression')
+        .map((step) => [step.label, { templates: [[...session.templates[step.label]]] }])),
+    };
+    this.onCalibrationComplete(profile);
+    this.onCalibrationProgress({ state: 'done', displayName: session.displayName });
+  }
+
   recordAuFrame(units, now) {
     this.recentAuFrames.push({ at: now, units: { ...units } });
     this.recentAuFrames = this.recentAuFrames
       .filter((frame) => now - frame.at <= 2200);
+    if (this.calibrationSession && this.calibrationSession.phase === 'capturing'
+      && this.faceAvailable) {
+      this.calibrationSession.frames.push({ at: now, units: { ...units } });
+    }
   }
 
   smoothedAuUnits(now) {
@@ -196,6 +504,7 @@ export class EmotionTracker {
   }
 
   captureBaselineIfReady() {
+    if (this.calibrationSession) return false;
     if (this.baselineAu || !this.faceAvailable) return false;
     const now = performance.now();
     if (now - this.baselineStartedAt < BASELINE_COUNTDOWN_MS) return false;
@@ -219,6 +528,10 @@ export class EmotionTracker {
   }
 
   inferExpression(currentUnits) {
+    if (!this.baselineAu || !currentUnits) {
+      return { state: 'neutral', emotions: ['neutral'] };
+    }
+    const classes = this.personalClasses || EMOTION_MODEL.classes;
     const vector = EMOTION_MODEL.features.map((name) => {
       const rawChange = Number(currentUnits[name] ?? this.baselineAu[name])
         - Number(this.baselineAu[name] ?? currentUnits[name]);
@@ -234,22 +547,23 @@ export class EmotionTracker {
       ? signalL1 * signalL1 / (queryNorm * queryNorm)
       : 0;
 
-    const ranked = Object.entries(EMOTION_MODEL.classes)
+    const ranked = Object.entries(classes)
       .map(([label, profile]) => {
         const match = profile.templates
           .map((template) => templateMatchMetrics(vector, template, queryNorm))
           .sort((left, right) => right.similarity - left.similarity)[0];
-        return { label, ...match };
+        const threshold = this.settings[EMOTION_THRESHOLD_SETTINGS[label]] ?? 0.75;
+        return { label, threshold, ...match };
       })
       .sort((left, right) => right.similarity - left.similarity);
     const winner = ranked.find((candidate) => (
-      candidate.similarity >= MINIMUM_EMOTION_SIMILARITY
+      candidate.similarity >= candidate.threshold
       && candidate.scale >= MINIMUM_TEMPLATE_SCALE
       && candidate.residualRatio <= MAXIMUM_RESIDUAL_RATIO
     ));
     if (
       !winner
-      || queryNorm < MINIMUM_SIGNAL_NORM
+      || queryNorm < this.settings.minimumSignalNorm
       || effectiveAuCount < MINIMUM_EFFECTIVE_AUS
     ) {
       return { state: 'neutral', emotions: ['neutral'] };
@@ -312,10 +626,20 @@ export class EmotionTracker {
       this.handleUnavailableFace();
       return false;
     }
+
+    const now = performance.now();
+    const heartRate = extractHeartRate(snapshot);
+    if (heartRate && heartRate.valid) {
+      this.latestHeartRate = { bpm: heartRate.bpm, at: now };
+      this.onHeartRate(heartRate.bpm);
+      if (this.windowActive) {
+        this.windowHeartRateSamples.push({ t: now, bpm: heartRate.bpm });
+      }
+    }
+
     const units = normalizedAuUnits(snapshot);
     if (!units) return false;
 
-    const now = performance.now();
     this.faceAvailable = true;
     this.latestReceivedAt = now;
     window.clearTimeout(this.staleTimer);
@@ -338,6 +662,11 @@ export class EmotionTracker {
   handleUnavailableFace() {
     const now = performance.now();
     this.accumulateWindowUntil(now);
+    if (this.windowCurrentSegment && this.windowCurrentSegment.durationMs > 0) {
+      this.windowSegments.push(this.windowCurrentSegment);
+    }
+    this.windowCurrentSegment = null;
+    this.windowLastInferenceKey = '';
     this.faceAvailable = false;
     this.latestReceivedAt = 0;
     this.windowLastLabels = [];
@@ -353,10 +682,12 @@ export class EmotionTracker {
 
   connectionFailed(message) {
     this.clearLatestResult();
+    this.connectionError = true;
     this.onCalibrationState({ state: 'connection_error', message });
   }
 
   connectionRestored() {
+    this.connectionError = false;
     if (this.baselineAu) {
       this.onCalibrationState({ state: 'ready' });
       if (this.stableInference) {
@@ -378,12 +709,16 @@ export class EmotionTracker {
   accumulateWindowUntil(now = performance.now()) {
     if (!this.windowActive || !this.windowLastLabels.length) {
       this.windowLastUpdatedAt = now;
+      this.onSegmentState(null);
       return;
     }
     const elapsed = Math.max(0, now - this.windowLastUpdatedAt);
-    const share = elapsed / this.windowLastLabels.length;
-    for (const emotion of this.windowLastLabels) {
-      this.windowDurations[emotion] = (this.windowDurations[emotion] || 0) + share;
+    if (this.windowCurrentSegment) {
+      this.windowCurrentSegment.durationMs += elapsed;
+      this.onSegmentState({
+        durationMs: this.windowCurrentSegment.durationMs,
+        thresholdMs: this.settings.emotionSegmentMinMs,
+      });
     }
     this.windowLastUpdatedAt = now;
   }
@@ -395,16 +730,20 @@ export class EmotionTracker {
     const key = `${inference?.state || ''}:${labels.join('|')}`;
     if (key === this.windowLastInferenceKey) return;
     this.windowLastInferenceKey = key;
-    this.windowEmotionSequence.push([...labels]);
+    if (this.windowCurrentSegment && this.windowCurrentSegment.durationMs > 0) {
+      this.windowSegments.push(this.windowCurrentSegment);
+    }
+    this.windowCurrentSegment = { labels: [...labels], durationMs: 0 };
   }
 
   startWindow() {
     this.windowRequested = true;
-    this.windowDurations = {};
     this.windowLastUpdatedAt = performance.now();
     this.windowLastLabels = [];
-    this.windowEmotionSequence = [];
+    this.windowSegments = [];
+    this.windowCurrentSegment = null;
     this.windowLastInferenceKey = '';
+    this.windowHeartRateSamples = [];
     this.windowActive = Boolean(this.baselineAu);
     if (this.windowActive && this.faceAvailable && this.stableInference) {
       this.windowLastLabels = inferenceLabels(this.stableInference);
@@ -414,6 +753,10 @@ export class EmotionTracker {
 
   pauseWindow() {
     this.accumulateWindowUntil();
+    if (this.windowCurrentSegment && this.windowCurrentSegment.durationMs > 0) {
+      this.windowSegments.push(this.windowCurrentSegment);
+    }
+    this.windowCurrentSegment = null;
     this.windowRequested = false;
     this.windowActive = false;
     this.windowLastLabels = [];
@@ -427,18 +770,38 @@ export class EmotionTracker {
   }
 
   aggregateWindow() {
-    const totalDuration = Object.values(this.windowDurations)
-      .reduce((sum, duration) => sum + duration, 0);
+    const segments = this.windowCurrentSegment
+      ? [...this.windowSegments, this.windowCurrentSegment]
+      : [...this.windowSegments];
+
+    // 非中性段连续时长低于阈值则丢弃；中性段不受阈值限制，始终保留。
+    const thresholdMs = this.settings.emotionSegmentMinMs;
+    const kept = segments.filter((segment) => (
+      segment.labels.includes('neutral')
+      || segment.durationMs >= thresholdMs
+    ));
+
+    const totalDuration = kept.reduce((sum, segment) => sum + segment.durationMs, 0);
     const firstSeen = new Map();
-    this.windowEmotionSequence.forEach((emotions, sequenceIndex) => {
-      emotions.forEach((emotion, emotionIndex) => {
+    kept.forEach((segment, sequenceIndex) => {
+      segment.labels.forEach((emotion, emotionIndex) => {
         if (!firstSeen.has(emotion)) {
           firstSeen.set(emotion, sequenceIndex * 2 + emotionIndex);
         }
       });
     });
 
-    const durationEntries = Object.entries(this.windowDurations)
+    const durations = {};
+    for (const segment of kept) {
+      const share = segment.labels.length
+        ? segment.durationMs / segment.labels.length
+        : 0;
+      for (const emotion of segment.labels) {
+        durations[emotion] = (durations[emotion] || 0) + share;
+      }
+    }
+
+    const durationEntries = Object.entries(durations)
       .filter(([, duration]) => duration > 0);
     const nonNeutralEntries = durationEntries
       .filter(([emotion]) => emotion !== 'neutral');
@@ -454,7 +817,7 @@ export class EmotionTracker {
       .slice(0, 2)
       .sort((left, right) => (
         (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
-        - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
+          - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
       ))
       .map(([emotion]) => emotion);
 
@@ -464,14 +827,28 @@ export class EmotionTracker {
     };
   }
 
+  // 窗口内心率均值；样本不足时返回 null（不参与 prompt 拼接）。
+  windowHeartRateAggregate() {
+    const samples = this.windowHeartRateSamples;
+    if (samples.length < WINDOW_HEART_RATE_MINIMUM_SAMPLES) return null;
+    const total = samples.reduce((sum, sample) => sum + sample.bpm, 0);
+    const average = total / samples.length;
+    if (!Number.isFinite(average)) return null;
+    return {
+      avg_bpm: Math.round(average),
+      sample_count: samples.length,
+    };
+  }
+
   consumeWindow() {
     if (!this.baselineAu) {
       this.windowRequested = false;
       this.windowActive = false;
       this.windowLastLabels = [];
-      this.windowDurations = {};
-      this.windowEmotionSequence = [];
+      this.windowSegments = [];
+      this.windowCurrentSegment = null;
       this.windowLastInferenceKey = '';
+      this.windowHeartRateSamples = [];
       return null;
     }
     this.accumulateWindowUntil();
@@ -479,32 +856,44 @@ export class EmotionTracker {
     this.windowRequested = false;
     this.windowLastLabels = [];
     this.windowLastInferenceKey = '';
-    return this.aggregateWindow();
+    const aggregate = this.aggregateWindow();
+    const heartRate = this.windowHeartRateAggregate();
+    this.windowHeartRateSamples = [];
+    return heartRate ? { ...aggregate, heart_rate: heartRate } : aggregate;
   }
 
   reset() {
     window.clearTimeout(this.staleTimer);
     window.clearInterval(this.calibrationTimer);
+    window.clearTimeout(this.calibrationCaptureTimer);
     this.staleTimer = null;
     this.calibrationTimer = null;
+    this.calibrationCaptureTimer = null;
+    this.started = false;
     this.baselineStartedAt = 0;
     this.baselineAu = null;
     this.auNoise = {};
     this.recentAuFrames = [];
+    this.personalClasses = null;
+    this.calibrationSession = null;
     this.inferenceCandidateKey = '';
     this.inferenceCandidateSince = 0;
     this.stableInference = null;
     this.faceAvailable = false;
+    this.connectionError = false;
     this.latestReceivedAt = 0;
+    this.latestHeartRate = null;
     this.windowRequested = false;
     this.windowActive = false;
     this.windowLastUpdatedAt = 0;
     this.windowLastLabels = [];
-    this.windowDurations = {};
-    this.windowEmotionSequence = [];
+    this.windowSegments = [];
+    this.windowCurrentSegment = null;
     this.windowLastInferenceKey = '';
+    this.windowHeartRateSamples = [];
     this.onLiveEmotion(null);
     this.onAuDeltas(null);
+    this.onSegmentState(null);
     this.onCalibrationState({ state: 'idle' });
   }
 

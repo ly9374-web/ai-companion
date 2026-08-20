@@ -15,6 +15,11 @@ import { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloseButton } from '@/components/ui/close-button';
 import { toaster } from '@/components/ui/toaster';
+import {
+  OptionalSettingsContent,
+  OptionalSettingsTrigger,
+  useOptionalFeatureAvailability,
+} from '@optional-feature';
 
 import { settingStyles } from './setting-styles';
 import General from './general';
@@ -31,6 +36,7 @@ interface SettingUIProps {
 
 function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
   const { t } = useTranslation();
+  const optionalFeatureAvailable = useOptionalFeatureAvailability();
   const [saveHandlers, setSaveHandlers] = useState<(() => void)[]>([]);
   const [cancelHandlers, setCancelHandlers] = useState<(() => void)[]>([]);
   const [activeTab, setActiveTab] = useState('general');
@@ -91,9 +97,12 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
         <Tabs.Content value="rag" {...settingStyles.settingUI.tabs.content}>
           <Rag onSave={handleSaveCallback} onCancel={handleCancelCallback} />
         </Tabs.Content>
+        {optionalFeatureAvailable && (
+          <OptionalSettingsContent onSave={handleSaveCallback} onCancel={handleCancelCallback} />
+        )}
       </Tabs.ContentGroup>
     ),
-    [handleSaveCallback, handleCancelCallback],
+    [handleSaveCallback, handleCancelCallback, optionalFeatureAvailable],
   );
 
   return (
@@ -153,6 +162,7 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
               >
                 {t('settings.tabs.rag')}
               </Tabs.Trigger>
+              {optionalFeatureAvailable && <OptionalSettingsTrigger />}
             </Tabs.List>
 
             {tabsContent}

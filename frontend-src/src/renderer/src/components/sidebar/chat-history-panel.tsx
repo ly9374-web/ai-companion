@@ -24,13 +24,17 @@ import {
   useSendTextMessage,
 } from '@/hooks/footer/use-text-input';
 
-const CONVERSATION_STARTERS: { topic: QuickStartTopic; label: string }[] = [
-  { topic: 'english', label: '我想练英语' },
-  { topic: 'work', label: '我想聊工作' },
-  { topic: 'relationships', label: '我想聊关系' },
-  { topic: 'school', label: '我想聊学校' },
-  { topic: 'psychology', label: '我想学心理学' },
-  { topic: 'story', label: '给我讲个故事' },
+const CONVERSATION_STARTERS: {
+  topic: QuickStartTopic;
+  label: string;
+  borderColor: string;
+}[] = [
+  { topic: 'english', label: '我想练英语', borderColor: 'blue.400' },
+  { topic: 'psychology', label: '我想学心理学', borderColor: 'blue.400' },
+  { topic: 'story', label: '给我讲个故事', borderColor: 'blue.400' },
+  { topic: 'school', label: '我想聊学校', borderColor: 'purple.400' },
+  { topic: 'relationships', label: '我想聊关系', borderColor: 'purple.400' },
+  { topic: 'work', label: '我想聊工作', borderColor: 'purple.400' },
 ];
 
 // Main component
@@ -173,28 +177,60 @@ function ChatHistoryPanel(): JSX.Element {
                 );
                 })}
                 {showConversationStarters && (
-                  <Flex
-                    wrap="wrap"
-                    gap={2}
-                    px={3}
-                    py={3}
-                    justify="flex-start"
-                  >
-                    {CONVERSATION_STARTERS.map(({ topic, label }) => (
-                      <Button
-                        key={topic}
-                        size="sm"
-                        variant="outline"
-                        color="white"
-                        borderColor="whiteAlpha.400"
-                        _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
-                        disabled={starterPending}
-                        onClick={() => void sendConversationStarter(topic, label)}
-                      >
-                        {label}
-                      </Button>
-                    ))}
-                  </Flex>
+                  <>
+                    <Flex
+                      wrap="wrap"
+                      gap={2}
+                      px={3}
+                      py={3}
+                      justify="flex-start"
+                    >
+                      {CONVERSATION_STARTERS.slice(0, 3).map(
+                        ({ topic, label, borderColor }) => (
+                          <Button
+                            key={topic}
+                            size="sm"
+                            variant="outline"
+                            color="white"
+                            borderColor={borderColor}
+                            _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+                            disabled={starterPending}
+                            onClick={() =>
+                              void sendConversationStarter(topic, label)
+                            }
+                          >
+                            {label}
+                          </Button>
+                        ),
+                      )}
+                    </Flex>
+                    <Flex
+                      wrap="wrap"
+                      gap={2}
+                      px={3}
+                      py={1}
+                      justify="flex-start"
+                    >
+                      {CONVERSATION_STARTERS.slice(3, 6).map(
+                        ({ topic, label, borderColor }) => (
+                          <Button
+                            key={topic}
+                            size="sm"
+                            variant="outline"
+                            color="white"
+                            borderColor={borderColor}
+                            _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+                            disabled={starterPending}
+                            onClick={() =>
+                              void sendConversationStarter(topic, label)
+                            }
+                          >
+                            {label}
+                          </Button>
+                        ),
+                      )}
+                    </Flex>
+                  </>
                 )}
               </>
             )}

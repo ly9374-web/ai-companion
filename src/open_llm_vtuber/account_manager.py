@@ -248,6 +248,62 @@ def ensure_character_profile(account_name: str, conf_uid: str) -> Path:
     return role_dir
 
 
+_SYSTEM_PROMPT_OVERRIDE_NAME = "system_prompt_override.md"
+
+
+def get_system_prompt_override_path(account_name: str, conf_uid: str) -> Path:
+    """Return the path to one account/role's editable system prompt override file."""
+    if not isinstance(conf_uid, str) or not conf_uid.strip():
+        raise ValueError("conf_uid cannot be empty")
+    if Path(conf_uid).name != conf_uid or conf_uid in {".", ".."}:
+        raise ValueError("Invalid character UID")
+    return get_account_history_root(account_name) / conf_uid / _SYSTEM_PROMPT_OVERRIDE_NAME
+
+
+def read_system_prompt_override(account_name: str, conf_uid: str) -> str | None:
+    """Return the stored editable system prompt override, or None when absent."""
+    path = get_system_prompt_override_path(account_name, conf_uid)
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Cannot read system prompt override at {}: {}", path, exc)
+        return None
+
+
+def write_system_prompt_override(account_name: str, conf_uid: str, content: str) -> None:
+    """Atomically persist the editable system prompt override for one account/role."""
+    path = get_system_prompt_override_path(account_name, conf_uid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temp_file:
+            temp_file.write(content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def delete_system_prompt_override(account_name: str, conf_uid: str) -> bool:
+    """Remove the stored editable system prompt override if it exists."""
+    path = get_system_prompt_override_path(account_name, conf_uid)
+    if not path.is_file():
+        return False
+    try:
+        path.unlink()
+        return True
+    except OSError as exc:
+        logger.warning("Cannot delete system prompt override at {}: {}", path, exc)
+        return False
+
+
 def ensure_account_profile(account_name: str) -> str:
     """Ensure every currently configured role exists for an account."""
     canonical_account = normalize_account_name(account_name)

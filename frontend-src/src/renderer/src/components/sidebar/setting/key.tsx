@@ -102,7 +102,7 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
         placeholder={t('settings.key.deepseekPlaceholder')}
       />
       <SelectField
-        label={t('settings.key.deepseekModel')}
+        label=""
         value={[settings.deepseekModel]}
         onChange={(value) => setSettings((current) => ({
           ...current,

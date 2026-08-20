@@ -2,7 +2,7 @@
 cd "$(dirname "$0")"
 
 echo "================================================"
-echo "  Open-LLM-VTuber 简化版本"
+echo "  Open-LLM-VTuber ai陪伴"
 echo "  DeepSeek + Qwen TTS + Sherpa-ONNX ASR"
 echo "================================================"
 echo ""
