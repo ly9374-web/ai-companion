@@ -2,34 +2,38 @@ from typing import Dict, List, Optional, Callable, TypedDict
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 import json
-import os
-from pathlib import Path
 import numpy as np
 from loguru import logger
 
 from .service_context import ServiceContext
 from .message_handler import message_handler
+from .human_profile_manager import HumanProfileManager
+from prompts import prompt_builder
 from .chat_history_manager import (
     create_new_history,
+    extract_normal_turns,
     get_history,
     delete_history,
     get_history_list,
     get_recent_normal_history_messages,
+    get_recent_normal_turns,
     render_history_message_for_frontend,
     store_message,
+    undo_latest_chat_message,
 )
 from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
 from .config_manager.tts import QWEN_TTS_VOICES
-from .account_manager import account_can_access_character
-from .utils.stream_audio import prepare_audio_payload
+from .optional_features import (
+    collect_optional_analysis_data,
+    get_optional_new_history_messages,
+    optional_account_can_access_character,
+    run_optional_character_switch_action,
+)
+from .profiler_session import ProfilerAnalysisManager, is_profiler_character
 from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_individual_interrupt,
 )
-
-
-_GREETING_AUDIO_DIR = "greeting_audio"
-_GREETING_AUDIO_FILENAME = "welcome_message.wav"
 
 
 class WSMessage(TypedDict, total=False):
@@ -58,7 +62,6 @@ class WSMessage(TypedDict, total=False):
     grok_enabled: Optional[bool]
     qwen_api_key: Optional[str]
     optional_contexts: Optional[dict]
-    quick_start_topic: Optional[str]
     content: Optional[str]
 
 
@@ -69,9 +72,10 @@ class WebSocketHandler:
         """Initialize the WebSocket handler with default context"""
         self.client_contexts: Dict[str, ServiceContext] = {}
         self.current_conversation_tasks: Dict[str, Optional[asyncio.Task]] = {}
+        self.persona_profile_tasks: Dict[tuple[str, str], asyncio.Task] = {}
+        self.profiler_analysis_tasks: Dict[tuple[str, str], asyncio.Task] = {}
         self.default_context_cache = default_context_cache
         self.received_data_buffers: Dict[str, np.ndarray] = {}
-        self._greeting_audio_locks: Dict[str, asyncio.Lock] = {}
 
         # Message handlers mapping
         self._message_handlers = self._init_message_handlers()
@@ -84,6 +88,7 @@ class WebSocketHandler:
             "create-new-history": self._handle_create_history,
             "delete-history": self._handle_delete_history,
             "interrupt-signal": self._handle_interrupt,
+            "undo-last-message": self._handle_undo_last_message,
             "mic-audio-data": self._handle_audio_data,
             "mic-audio-end": self._handle_conversation_trigger,
             "raw-audio-data": self._handle_raw_audio_data,
@@ -100,6 +105,8 @@ class WebSocketHandler:
             "set-api-keys": self._handle_set_api_keys,
             "summarize-pending-memory": self._handle_manual_summary,
             "summarize-rolling-context": self._handle_debug_rolling_summary,
+            "generate-persona-profile": self._handle_generate_persona_profile,
+            "profiler-finalize": self._handle_profiler_finalize,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
             "request-init-config": self._handle_init_config_request,
             "fetch-system-prompt": self._handle_fetch_system_prompt,
@@ -263,6 +270,8 @@ class WebSocketHandler:
             "ai-speak-signal",
             "summarize-pending-memory",
             "summarize-rolling-context",
+            "generate-persona-profile",
+            "profiler-finalize",
         }:
             context = self.client_contexts.get(client_uid)
             if context is not None and not context.has_deepseek_api_key():
@@ -273,6 +282,7 @@ class WebSocketHandler:
                         {
                             "type": "api-key-required",
                             "provider": "deepseek",
+                            "request_type": msg_type,
                         }
                     )
                 )
@@ -295,6 +305,7 @@ class WebSocketHandler:
                         {
                             "type": "api-key-required",
                             "provider": "grok",
+                            "request_type": msg_type,
                         }
                     )
                 )
@@ -306,6 +317,199 @@ class WebSocketHandler:
         else:
             if msg_type != "frontend-playback-complete":
                 logger.warning(f"Unknown message type: {msg_type}")
+
+    async def _handle_generate_persona_profile(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Start one full non-debug profile snapshot for the active account/role."""
+        context = self.client_contexts[client_uid]
+        conf_uid = context.character_config.conf_uid
+        task_key = (context.history_root.resolve().as_posix(), conf_uid)
+        existing_task = self.persona_profile_tasks.get(task_key)
+        if existing_task is not None and not existing_task.done():
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "persona-profile-status",
+                        "status": "duplicate",
+                    }
+                )
+            )
+            return
+
+        generate_section = getattr(
+            context.agent_engine, "generate_persona_profile_section", None
+        )
+        if not callable(generate_section):
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "persona-profile-status",
+                        "status": "failed",
+                        "error": "当前对话代理不支持人物侧写",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        async def send_status(payload: dict) -> None:
+            message = {
+                "type": "persona-profile-status",
+                "status": "running",
+                **payload,
+            }
+            try:
+                await websocket.send_text(json.dumps(message, ensure_ascii=False))
+            except Exception:
+                logger.debug(
+                    "Persona profile progress receiver disconnected for {} / {}",
+                    context.account_name,
+                    conf_uid,
+                )
+
+        async def run_profile() -> None:
+            manager = HumanProfileManager()
+            try:
+                result = await manager.generate(
+                    account_name=context.account_name,
+                    conf_uid=conf_uid,
+                    character_name=context.character_config.character_name,
+                    history_root=context.history_root,
+                    generate_section=generate_section,
+                    build_chunk_input=prompt_builder.build_persona_profile_chunk_input,
+                    build_consolidation_input=(
+                        prompt_builder.build_persona_profile_consolidation_input
+                    ),
+                    build_final_input=prompt_builder.build_persona_profile_final_input,
+                    progress=send_status,
+                )
+                status = str(result.pop("status", "failed"))
+                await send_status({"status": status, **result})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Persona profile generation failed for {} / {}: {}",
+                    context.account_name,
+                    conf_uid,
+                    exc,
+                )
+                await send_status({"status": "failed", "error": str(exc)})
+            finally:
+                current = self.persona_profile_tasks.get(task_key)
+                if current is asyncio.current_task():
+                    self.persona_profile_tasks.pop(task_key, None)
+
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "persona-profile-status",
+                    "status": "accepted",
+                }
+            )
+        )
+        task = asyncio.create_task(run_profile())
+        self.persona_profile_tasks[task_key] = task
+
+    async def _handle_profiler_finalize(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Generate the completed 12-round profiler report with DeepSeek."""
+        context = self.client_contexts[client_uid]
+        history_uid = context.history_uid
+        if not is_profiler_character(context.character_config.conf_uid) or not history_uid:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "profiler-analysis-status",
+                        "status": "failed",
+                        "error": "当前会话不是可生成报告的侧写师会话",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        task_key = (context.history_root.resolve().as_posix(), history_uid)
+        existing_task = self.profiler_analysis_tasks.get(task_key)
+        if existing_task is not None and not existing_task.done():
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "profiler-analysis-status", "status": "duplicate"},
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        generate_section = getattr(
+            context.agent_engine, "generate_persona_profile_section", None
+        )
+        if not callable(generate_section):
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "profiler-analysis-status",
+                        "status": "failed",
+                        "error": "当前对话代理不支持 DeepSeek 侧写分析",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        final_listening_data = collect_optional_analysis_data(
+            data.get("optional_contexts"),
+            context,
+        )
+
+        async def send_status(payload: dict) -> None:
+            try:
+                await websocket.send_text(
+                    json.dumps(
+                        {"type": "profiler-analysis-status", **payload},
+                        ensure_ascii=False,
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "Profiler analysis receiver disconnected for {} / {}",
+                    context.account_name,
+                    history_uid,
+                )
+
+        async def run_analysis() -> None:
+            manager = ProfilerAnalysisManager()
+            try:
+                await send_status({"status": "running", "progress": 10})
+                result = await manager.generate(
+                    account_name=context.account_name,
+                    history_uid=history_uid,
+                    history_root=context.history_root,
+                    final_listening_data=final_listening_data,
+                    generate=lambda user_prompt: generate_section(
+                        "profiler_thinslice", user_prompt
+                    ),
+                )
+                await send_status({"progress": 100, **result})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Profiler analysis failed for {} / {}: {}",
+                    context.account_name,
+                    history_uid,
+                    exc,
+                )
+                await send_status({"status": "failed", "error": str(exc)})
+            finally:
+                current = self.profiler_analysis_tasks.get(task_key)
+                if current is asyncio.current_task():
+                    self.profiler_analysis_tasks.pop(task_key, None)
+
+        await send_status({"status": "accepted", "progress": 0})
+        task = asyncio.create_task(run_analysis())
+        self.profiler_analysis_tasks[task_key] = task
 
     async def handle_disconnect(self, client_uid: str) -> None:
         """Handle client disconnection"""
@@ -348,6 +552,246 @@ class WebSocketHandler:
             current_conversation_tasks=self.current_conversation_tasks,
             context=context,
             heard_response=heard_response,
+        )
+
+    async def _rebuild_cancelled_summaries(
+        self,
+        context: ServiceContext,
+        history_uid: str,
+        cancelled_labels: set[str],
+        browser_time: str = "",
+    ) -> None:
+        """Re-run cancelled summary work from the latest six complete turns."""
+        if not cancelled_labels:
+            return
+
+        rebuild_all = "undo-rebuild" in cancelled_labels
+        needs_rolling = rebuild_all or any(
+            label.startswith("rolling") for label in cancelled_labels
+        )
+        needs_memory = rebuild_all or "manual" in cancelled_labels or any(
+            label.startswith("long_term_memory") for label in cancelled_labels
+        )
+        needs_short_relationship = (
+            rebuild_all
+            or "manual" in cancelled_labels
+            or any(
+                label.startswith("short_term_relationship")
+                for label in cancelled_labels
+            )
+        )
+        needs_long_relationship = rebuild_all or any(
+            label.startswith("long_term_relationship")
+            for label in cancelled_labels
+        )
+
+        conf_uid = context.character_config.conf_uid
+        recent_turns = get_recent_normal_turns(
+            conf_uid,
+            6,
+            context.history_root,
+        )
+        current_turns = [
+            {
+                "user": str(turn["user"].get("content", "")).strip(),
+                "assistant": str(turn["assistant"].get("content", "")).strip(),
+            }
+            for turn in extract_normal_turns(
+                get_history(conf_uid, history_uid, context.history_root)
+            )[-6:]
+        ]
+
+        if needs_rolling and current_turns:
+            summarize_rolling = getattr(
+                context.agent_engine, "summarize_rolling_context", None
+            )
+            if summarize_rolling is not None:
+                await context.rolling_summary_manager.regenerate_recent_turns(
+                    conf_uid,
+                    history_uid,
+                    current_turns,
+                    summarize_rolling,
+                )
+
+        if needs_memory and recent_turns:
+            summarize_memory = getattr(
+                context.agent_engine, "summarize_long_term_memory", None
+            )
+            reconcile_memory = getattr(
+                context.agent_engine, "reconcile_long_term_memory", None
+            )
+            if summarize_memory is not None and reconcile_memory is not None:
+                character_system_prompt = context.get_editable_system_prompt()
+
+                async def summarize_with_character_prompt(turns):
+                    return await summarize_memory(
+                        turns,
+                        character_system_prompt,
+                        browser_time,
+                    )
+
+                await context.long_term_memory_manager.replace_pending_turns(
+                    conf_uid, history_uid, recent_turns
+                )
+                await context.long_term_memory_manager.summarize_pending_turns(
+                    conf_uid=conf_uid,
+                    history_uid=history_uid,
+                    summarize=summarize_with_character_prompt,
+                    reconcile=reconcile_memory,
+                )
+
+        if needs_short_relationship and recent_turns:
+            summarize_short = getattr(
+                context.agent_engine,
+                "summarize_short_term_relationship",
+                None,
+            )
+            if summarize_short is not None:
+                await context.short_term_relationship_manager.replace_pending_turns(
+                    conf_uid, history_uid, recent_turns
+                )
+                await context.short_term_relationship_manager.summarize_pending_turns(
+                    conf_uid=conf_uid,
+                    history_uid=history_uid,
+                    summarize=summarize_short,
+                    recent_turns_override=recent_turns,
+                )
+
+        if needs_long_relationship and recent_turns:
+            summarize_long_relationship = getattr(
+                context.agent_engine,
+                "summarize_long_term_relationship",
+                None,
+            )
+            if summarize_long_relationship is not None:
+                await context.long_term_relationship_manager.replace_pending_update_count(
+                    conf_uid, history_uid, len(recent_turns)
+                )
+                await context.long_term_relationship_manager.summarize_pending_update(
+                    conf_uid=conf_uid,
+                    history_uid=history_uid,
+                    summarize=summarize_long_relationship,
+                )
+
+    async def _handle_undo_last_message(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Cancel active work and remove one latest user/assistant message."""
+        context = self.client_contexts[client_uid]
+        history_uid = context.history_uid
+        if not history_uid:
+            await websocket.send_text(
+                json.dumps({"type": "undo-last-message-result", "success": False})
+            )
+            return
+
+        task = self.current_conversation_tasks.get(client_uid)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            self.current_conversation_tasks[client_uid] = None
+
+        conf_uid = context.character_config.conf_uid
+        current_messages = get_history(
+            conf_uid, history_uid, context.history_root
+        )
+        completed_turns_before = extract_normal_turns(current_messages)
+        if not any(
+            message.get("role") in {"human", "ai"}
+            for message in current_messages
+        ):
+            await websocket.send_text(
+                json.dumps({"type": "undo-last-message-result", "success": False})
+            )
+            return
+
+        cancelled_labels = await context.summary_coordinator.cancel_all()
+        removed = undo_latest_chat_message(
+            conf_uid, history_uid, context.history_root
+        )
+        if removed is None:
+            await websocket.send_text(
+                json.dumps({"type": "undo-last-message-result", "success": False})
+            )
+            return
+
+        current_messages = get_history(
+            conf_uid, history_uid, context.history_root
+        )
+        completed_turns_after = extract_normal_turns(current_messages)
+        if len(completed_turns_after) < len(completed_turns_before):
+            withdrawn_turn = completed_turns_before[-1]
+            withdrawn_turn_payload = {
+                "user": str(
+                    withdrawn_turn["user"].get("content", "")
+                ).strip(),
+                "assistant": str(
+                    withdrawn_turn["assistant"].get("content", "")
+                ).strip(),
+            }
+            await context.long_term_memory_manager.discard_pending_turn(
+                conf_uid, history_uid, withdrawn_turn_payload
+            )
+            await context.short_term_relationship_manager.discard_pending_turn(
+                conf_uid, history_uid, withdrawn_turn_payload
+            )
+            await context.long_term_relationship_manager.discard_latest_pending_turn(
+                conf_uid, history_uid
+            )
+        recent_messages = []
+        if not context.isolated_conversation_context:
+            recent_messages = get_recent_normal_history_messages(
+                conf_uid,
+                context.max_history_turns,
+                context.history_root,
+                exclude_history_uid=history_uid,
+            )
+        set_memory_from_messages = getattr(
+            context.agent_engine, "set_memory_from_messages", None
+        )
+        if set_memory_from_messages is not None:
+            set_memory_from_messages(recent_messages + current_messages)
+        else:
+            context.agent_engine.set_memory_from_history(
+                conf_uid=conf_uid,
+                history_uid=history_uid,
+                history_root=context.history_root,
+            )
+
+        if cancelled_labels:
+            browser_time = data.get("browser_time", "")
+            if not isinstance(browser_time, str):
+                browser_time = ""
+            context.summary_coordinator.enqueue(
+                "undo-rebuild",
+                lambda: self._rebuild_cancelled_summaries(
+                    context,
+                    history_uid,
+                    cancelled_labels,
+                    browser_time,
+                ),
+            )
+
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "undo-last-message-result",
+                    "success": True,
+                    "removed_role": removed.get("role"),
+                    "messages": [
+                        render_history_message_for_frontend(message)
+                        for message in current_messages
+                        if message.get("role") != "system"
+                    ],
+                    "histories": get_history_list(
+                        conf_uid, context.history_root
+                    ),
+                    "summary_rebuild_started": bool(cancelled_labels),
+                }
+            )
         )
 
     async def _handle_history_list_request(
@@ -406,14 +850,14 @@ class WebSocketHandler:
         if history_uid:
             context.history_uid = history_uid
             context.english_mode = False
-            if context.conversation_starters_enabled:
+            for initial_message in get_optional_new_history_messages(context):
                 store_message(
                     conf_uid=context.character_config.conf_uid,
                     history_uid=history_uid,
-                    role="ai",
-                    content=context.character_config.welcome_message,
-                    name=context.character_config.character_name,
-                    avatar=context.character_config.avatar,
+                    role=str(initial_message.get("role", "ai")),
+                    content=str(initial_message.get("content", "")),
+                    name=str(initial_message.get("name", "")),
+                    avatar=str(initial_message.get("avatar", "")),
                     history_root=context.history_root,
                 )
             current_messages = get_history(
@@ -539,7 +983,7 @@ class WebSocketHandler:
         config_files = [
             {"filename": config["filename"], "name": config["name"]}
             for config in scanned_configs
-            if account_can_access_character(
+            if optional_account_can_access_character(
                 context.account_name,
                 config.get("conf_uid"),
             )
@@ -565,7 +1009,7 @@ class WebSocketHandler:
                 ),
                 None,
             )
-            if selected_config and not account_can_access_character(
+            if selected_config and not optional_account_can_access_character(
                 context.account_name,
                 selected_config.get("conf_uid"),
             ):
@@ -579,100 +1023,9 @@ class WebSocketHandler:
                 )
                 return
             await context.handle_config_switch(websocket, config_file_name)
-            await self._send_character_greeting(websocket, context)
-
-    @staticmethod
-    def _is_valid_wav(path: Path) -> bool:
-        """Return whether a persisted greeting has a basic WAV signature."""
-        try:
-            with path.open("rb") as audio_file:
-                header = audio_file.read(12)
-        except OSError:
-            return False
-        return (
-            len(header) == 12
-            and header[:4] == b"RIFF"
-            and header[8:12] == b"WAVE"
-        )
-
-    async def _get_or_create_character_greeting(
-        self,
-        context: ServiceContext,
-    ) -> Path:
-        """Persist one welcome-message recording per CS account and character."""
-        voice = context.get_current_tts_voice()
-        greeting_filename = (
-            f"welcome_message_{voice}.wav" if voice else _GREETING_AUDIO_FILENAME
-        )
-        target_path = (
-            context.history_root
-            / context.character_config.conf_uid
-            / _GREETING_AUDIO_DIR
-            / greeting_filename
-        )
-        lock_key = str(target_path.resolve())
-        lock = self._greeting_audio_locks.setdefault(lock_key, asyncio.Lock())
-
-        async with lock:
-            if self._is_valid_wav(target_path):
-                return target_path
-
-            welcome_message = context.character_config.welcome_message.strip()
-            if not welcome_message:
-                raise ValueError("The active character has no welcome message")
-            if context.tts_engine is None:
-                raise RuntimeError("The active character has no TTS engine")
-
-            generated_path: Path | None = None
-            try:
-                generated_path = Path(
-                    await context.tts_engine.async_generate_audio(
-                        text=welcome_message,
-                        file_name_no_ext=(
-                            f"welcome_{context.character_config.conf_uid}_"
-                            f"{context.client_uid}"
-                        ),
-                    )
-                )
-                if not self._is_valid_wav(generated_path):
-                    raise ValueError("TTS generated an invalid welcome-message WAV")
-
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(generated_path, target_path)
-                generated_path = None
-                logger.info(
-                    "Persisted CS character greeting for account={} character={} at {}",
-                    context.account_name,
-                    context.character_config.conf_uid,
-                    target_path,
-                )
-                return target_path
-            finally:
-                if generated_path is not None and generated_path.exists():
-                    context.tts_engine.remove_file(str(generated_path), verbose=False)
-
-    async def _send_character_greeting(
-        self,
-        websocket: WebSocket,
-        context: ServiceContext,
-    ) -> None:
-        """Auto-play the selected character's stored greeting for CS accounts."""
-        if not context.isolated_conversation_context:
-            return
-
-        try:
-            audio_path = await self._get_or_create_character_greeting(context)
-            payload = prepare_audio_payload(audio_path=str(audio_path))
-            await websocket.send_text(json.dumps(payload))
-        except Exception as exc:
-            # Greeting audio is an enhancement to a successful character switch;
-            # a missing key or TTS outage must not roll the switch back.
-            logger.warning(
-                "Unable to prepare CS character greeting for account={} character={}: {}",
-                context.account_name,
-                context.character_config.conf_uid,
-                exc,
-            )
+            optional_payload = await run_optional_character_switch_action(context)
+            if optional_payload:
+                await websocket.send_text(json.dumps(optional_payload))
 
     async def _handle_set_tts_voice(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
@@ -840,12 +1193,21 @@ class WebSocketHandler:
         if not isinstance(browser_time, str):
             browser_time = ""
 
+        character_system_prompt = context.get_editable_system_prompt()
+
+        async def summarize_memory_with_character_prompt(turns):
+            return await summarize_memory(
+                turns,
+                character_system_prompt,
+                browser_time,
+            )
+
         async def run_manual_summary() -> tuple[str, str]:
             memory_result = (
                 await context.long_term_memory_manager.summarize_pending_turns(
                     conf_uid=conf_uid,
                     history_uid=history_uid,
-                    summarize=summarize_memory,
+                    summarize=summarize_memory_with_character_prompt,
                     reconcile=reconcile_memory,
                 )
                 if summarize_memory is not None and reconcile_memory is not None

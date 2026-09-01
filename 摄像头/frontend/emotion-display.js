@@ -13,18 +13,37 @@ function emotionLabel(emotions) {
     .join('或');
 }
 
-function emotionAggregateLabel(emotions) {
-  if (!Array.isArray(emotions) || !emotions.length) return '';
-  const labels = emotions
-    .map((emotion) => EMOTION_LABELS_ZH.get(emotion) || emotion);
-  return labels.length === 1 ? labels[0] : `先${labels[0]}转为${labels[1]}`;
-}
-
-function emotionSequenceLabel(sequence) {
-  if (!Array.isArray(sequence) || !sequence.length) return '';
-  const labels = sequence.map((emotions) => emotionLabel(emotions)).filter(Boolean);
-  if (!labels.length) return '';
-  return labels.length === 1 ? labels[0] : `先${labels.join('转为')}`;
+function emotionDurationAggregateLabel(aggregate) {
+  const listeningSegments = aggregate?.listening_segments;
+  if (Array.isArray(listeningSegments) && listeningSegments.length) {
+    return listeningSegments
+      .slice(0, 3)
+      .map((segment) => {
+        const text = String(segment?.text || '').replace(/\s+/g, ' ').slice(0, 18);
+        const label = emotionLabel([segment?.emotion]);
+        const durationMs = Number(segment?.duration_ms);
+        return text && label && Number.isFinite(durationMs)
+          ? `听“${text}”时${Math.round(durationMs)}毫秒${label}`
+          : '';
+      })
+      .filter(Boolean)
+      .join('，');
+  }
+  const groups = aggregate?.emotion_durations;
+  if (!Array.isArray(groups)) return '';
+  if (!groups.length) {
+    return Array.isArray(aggregate?.emotions) && aggregate.emotions.includes('neutral')
+      ? EMOTION_LABELS_ZH.get('neutral')
+      : '';
+  }
+  return groups
+    .map((group) => {
+      const label = emotionLabel(group?.emotions);
+      const durationMs = Number(group?.duration_ms);
+      return label && Number.isFinite(durationMs) ? `${Math.round(durationMs)}毫秒${label}` : '';
+    })
+    .filter(Boolean)
+    .join('，');
 }
 
 // ===== 心率折线图（移植自 emotion_camera算法支持/static/index.html） =====
@@ -402,24 +421,20 @@ export class EmotionDisplay {
     this.liveValue.textContent = emotionLabel(emotions);
   }
 
-  // 根据当前段持续时长与阈值比较，更新实时表情文字颜色：
-  // 达到阈值（最终会被带入对话）变绿，未达到变白。
+  // 根据当前表情组合的累计时长与阈值比较：
+  // 非中性结果达到阈值（最终会被带入对话）变绿，其余变白。
   setSegmentState(state) {
     if (!state) {
       this.liveValue.style.color = '#ffffff';
       return;
     }
-    this.liveValue.style.color = state.durationMs >= state.thresholdMs
+    this.liveValue.style.color = state.eligible && state.durationMs >= state.thresholdMs
       ? '#66e2bc'
       : '#ffffff';
   }
 
-  setFinal(emotions) {
-    this.finalValue.textContent = emotionAggregateLabel(emotions);
-  }
-
-  setFinalSequence(sequence) {
-    this.finalValue.textContent = emotionSequenceLabel(sequence);
+  setFinalAggregate(aggregate) {
+    this.finalValue.textContent = emotionDurationAggregateLabel(aggregate);
   }
 
   setAuDeltas(items) {
@@ -533,7 +548,7 @@ export class EmotionDisplay {
   clear() {
     this.setLive(null);
     this.setSegmentState(null);
-    this.setFinal(null);
+    this.setFinalAggregate(null);
     this.latestAuDeltas = null;
     this.setAuDeltas(null);
     this.heartRateSamples = [];

@@ -520,7 +520,7 @@ def _write_character_config(path: Path, character_name: str, expression_dir: str
     config = {
         "character_config": {
             "conf_name": character_name,
-            "conf_uid": f"generated_{uuid4().hex}",
+            "conf_uid": character_name,
             "live2d_model_name": "Algernon",
             "character_name": character_name,
             "avatar": f"{character_name}.png",

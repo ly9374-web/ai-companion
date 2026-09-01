@@ -11,13 +11,14 @@ import {
 import {
   Box,
   Button,
+  Flex,
   HStack,
   Input,
   Stack,
   Tabs,
   Text,
 } from '@chakra-ui/react';
-import { FiCamera } from 'react-icons/fi';
+import { FiCamera, FiGlobe, FiMonitor } from 'react-icons/fi';
 import { useTranslation } from 'react-i18next';
 import { toaster } from '@/components/ui/toaster';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -32,9 +33,22 @@ import {
   DialogCloseTrigger,
 } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
-import { sidebarStyles } from '@/components/sidebar/sidebar-styles';
 import { settingStyles } from '@/components/sidebar/setting/setting-styles';
 import { getCurrentBaseUrl } from '@/constants/connection-settings';
+import { useAccount } from '@/context/account-context';
+import { useChatHistory } from '@/context/chat-history-context';
+import { useConfig } from '@/context/character-config-context';
+import { useSendTextMessage } from '@/hooks/footer/use-text-input';
+import { NumberField } from '@/components/sidebar/setting/common';
+import {
+  getStoredImageCompressionQuality,
+  getStoredImageMaxWidth,
+} from '@/constants/image-settings';
+
+declare class ImageCapture {
+  constructor(track: MediaStreamTrack);
+  grabFrame(): Promise<ImageBitmap>;
+}
 
 interface EmotionSettings {
   minimumSignalNorm: number;
@@ -50,8 +64,14 @@ interface HeartRateAggregate {
   sample_count: number;
 }
 
+interface EmotionDurationAggregate {
+  emotions: string[];
+  duration_ms: number;
+}
+
 interface EmotionAggregate {
   emotions: string[];
+  emotion_durations: EmotionDurationAggregate[];
   valid_duration_ms: number;
   heart_rate?: HeartRateAggregate;
 }
@@ -93,6 +113,14 @@ interface RuntimeFeature {
   pauseWindow: () => void;
   resumeWindow: () => void;
   consumeWindow: () => EmotionAggregate | null;
+  beginAssistantResponse: () => void;
+  startAssistantSegment: (text: string) => void;
+  finishAssistantSegment: (details: {
+    interrupted?: boolean;
+    playbackRatio?: number;
+  }) => void;
+  finishAssistantResponse: () => void;
+  consumeAssistantResponse: () => Record<string, unknown> | null;
   getProfileState: () => RuntimeProfileState;
   getSettings: () => EmotionSettings;
   subscribeProfileState: (listener: (state: RuntimeProfileState) => void) => () => void;
@@ -111,13 +139,81 @@ interface CameraState {
   available: boolean;
   isStreaming: boolean;
   stream: MediaStream | null;
+  startedAt: number | null;
   startCamera: () => Promise<void>;
   stopCamera: () => void;
 }
 
+interface ScreenCaptureState {
+  stream: MediaStream | null;
+  isStreaming: boolean;
+  error: string;
+  startCapture: () => Promise<void>;
+  stopCapture: () => void;
+}
+
+interface BrowserViewData {
+  debuggerFullscreenUrl: string;
+  debuggerUrl: string;
+  pages: Array<{
+    id: string;
+    url: string;
+    faviconUrl: string;
+    title: string;
+    debuggerUrl: string;
+    debuggerFullscreenUrl: string;
+  }>;
+  wsUrl: string;
+  sessionId?: string;
+}
+
+interface OptionalSettingsCallbacks {
+  onSave?: (callback: () => void) => () => void;
+  onCancel?: (callback: () => void) => () => void;
+}
+
+const FEATURE_COPY = {
+  zh: {
+    screen: '共享屏幕', browser: '浏览器', screenControl: '点击开始屏幕共享',
+    screenStopping: '点击停止屏幕共享', screenFailed: '启动屏幕捕获失败',
+    noBrowserSession: '无活跃浏览器会话', browserSession: '浏览器会话',
+    inviteTitle: '开启摄像头？',
+    inviteDescription: '该账号支持表情识别。现在开启摄像头并采集你的表情基线吗？',
+    inviteCancel: '暂不开启', inviteConfirm: '开启摄像头',
+    emotionSegment: '表情段最小时长(ms)',
+    emotionSegmentHelp: '单段表情连续持续不足此时长则不计入本轮输出（中性段不受此限制）。范围0-10000，默认1500。',
+  },
+  en: {
+    screen: 'Screen', browser: 'Browser', screenControl: 'Click to start screen capture',
+    screenStopping: 'Click to stop screen capture', screenFailed: 'Failed to start screen capture',
+    noBrowserSession: 'No active browser session', browserSession: 'Browser Session',
+    inviteTitle: 'Enable Camera?',
+    inviteDescription: 'This account supports emotion recognition. Open the camera now to capture your expression baseline?',
+    inviteCancel: 'Not Now', inviteConfirm: 'Enable Camera',
+    emotionSegment: 'Min Expression Segment (ms)',
+    emotionSegmentHelp: 'Expression segments shorter than this are excluded (neutral is exempt). Range 0-10000; default 1500.',
+  },
+};
+
+const OPTIONAL_SIDEBAR_STYLES = {
+  root: { width: '97%', px: 4, position: 'relative' as const, zIndex: 0 },
+  list: { borderBottom: 'none', gap: 2 },
+  trigger: {
+    color: 'whiteAlpha.700', display: 'flex', alignItems: 'center', gap: 2,
+    _selected: { color: 'white', bg: 'whiteAlpha.200' },
+  },
+  panel: { width: '97%', overflow: 'hidden', px: 4, minH: '240px' },
+  preview: {
+    width: '100%', height: '240px', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', overflow: 'hidden', bg: 'blackAlpha.400',
+    border: '1px solid', borderColor: 'whiteAlpha.200', borderRadius: 'lg',
+  },
+};
+
 const CAMERA_COPY = {
   zh: {
     label: '摄像头', control: '点击启动摄像头', stopping: '点击停止摄像头',
+    relaxPrompt: '保持面部肌肉放松',
     apiUnsupported: '此设备不支持摄像头API',
     secureRequired: '摄像头只能在 localhost 或 HTTPS 安全页面中使用。',
     permissionBlocked: '此站点的摄像头权限已被阻止，请允许摄像头权限后刷新。',
@@ -127,6 +223,7 @@ const CAMERA_COPY = {
   },
   en: {
     label: 'Camera', control: 'Click to start camera', stopping: 'Click to stop camera',
+    relaxPrompt: 'Keep your facial muscles relaxed',
     apiUnsupported: 'Camera API is not supported on this device',
     secureRequired: 'Camera access requires localhost or HTTPS.',
     permissionBlocked: 'Camera access is blocked. Allow camera access, then reload.',
@@ -227,7 +324,16 @@ function useYimouCopy() {
   return i18n.language.toLowerCase().startsWith('zh') ? YIMOU_COPY.zh : YIMOU_COPY.en;
 }
 
+function useFeatureCopy() {
+  const { i18n } = useTranslation();
+  return i18n.language.toLowerCase().startsWith('zh') ? FEATURE_COPY.zh : FEATURE_COPY.en;
+}
+
 const CameraContext = createContext<CameraState | null>(null);
+const ScreenCaptureContext = createContext<ScreenCaptureState | null>(null);
+const BrowserViewContext = createContext<BrowserViewData | null>(null);
+let latestBrowserView: BrowserViewData | null = null;
+const browserViewListeners = new Set<(value: BrowserViewData | null) => void>();
 let runtime: RuntimeFeature | null = null;
 let loadPromise: Promise<void> | null = null;
 let featureAvailable = false;
@@ -291,13 +397,29 @@ export const optionalFeature = {
     proactiveSpeakPending = true;
   },
   onConversationStart() {
-    if (!proactiveSpeakPending) return;
     proactiveSpeakPending = false;
-    runtime?.pauseWindow();
+    runtime?.beginAssistantResponse();
   },
   onConversationEnd() {
     proactiveSpeakPending = false;
-    runtime?.startWindow();
+    runtime?.finishAssistantResponse();
+  },
+  onAssistantAudioStart(details: { text?: string }) {
+    runtime?.startAssistantSegment(details?.text || '');
+  },
+  onAssistantAudioEnd(details: { interrupted?: boolean; playbackRatio?: number }) {
+    runtime?.finishAssistantSegment(details || {});
+  },
+  consumeAssistantResponse(): Record<string, unknown> | null {
+    const aggregate = runtime?.consumeAssistantResponse() || null;
+    return aggregate ? { camera_emotion: aggregate } : null;
+  },
+  handleWebSocketMessage(message: unknown) {
+    if (!message || typeof message !== 'object') return;
+    const browserView = (message as { browser_view?: unknown }).browser_view;
+    if (!browserView || typeof browserView !== 'object') return;
+    latestBrowserView = browserView as BrowserViewData;
+    browserViewListeners.forEach((listener) => listener(latestBrowserView));
   },
   getEmotionSegmentMinMs(): number {
     return runtime?.getSettings()?.emotionSegmentMinMs ?? 1500;
@@ -325,6 +447,81 @@ export function useCamera() {
   return value;
 }
 
+function OptionalMediaProvider({ children }: { children: ReactNode }) {
+  const copy = useFeatureCopy();
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [error, setError] = useState('');
+  const [browserView, setBrowserView] = useState<BrowserViewData | null>(latestBrowserView);
+
+  const startCapture = useCallback(async () => {
+    try {
+      let mediaStream: MediaStream;
+      if (window.electron) {
+        const sourceId = await window.electron.ipcRenderer.invoke('get-screen-capture');
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            // Electron's desktop capture constraint is Chromium-specific.
+            // @ts-expect-error Chromium desktop constraint
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+              minWidth: 1280,
+              maxWidth: 1280,
+              minHeight: 720,
+              maxHeight: 720,
+            },
+          },
+          audio: false,
+        });
+      } else {
+        mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      }
+      streamRef.current = mediaStream;
+      setStream(mediaStream);
+      setError('');
+      mediaStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+        streamRef.current = null;
+        setStream(null);
+      }, { once: true });
+    } catch (caught) {
+      const message = `${copy.screenFailed}: ${caught}`;
+      setError(message);
+      toaster.create({ title: message, type: 'error', duration: 2000 });
+    }
+  }, [copy]);
+
+  const stopCapture = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setStream(null);
+  }, []);
+
+  useEffect(() => {
+    browserViewListeners.add(setBrowserView);
+    return () => {
+      browserViewListeners.delete(setBrowserView);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const screenValue = useMemo(() => ({
+    stream,
+    isStreaming: stream !== null,
+    error,
+    startCapture,
+    stopCapture,
+  }), [stream, error, startCapture, stopCapture]);
+
+  return (
+    <ScreenCaptureContext.Provider value={screenValue}>
+      <BrowserViewContext.Provider value={browserView}>
+        {children}
+      </BrowserViewContext.Provider>
+    </ScreenCaptureContext.Provider>
+  );
+}
+
 async function permissionState(): Promise<PermissionState | null> {
   try {
     return (await navigator.permissions?.query({ name: 'camera' } as PermissionDescriptor))?.state || null;
@@ -337,6 +534,7 @@ export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
   const copy = useCameraCopy();
   const available = useOptionalFeatureAvailability();
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const openCamera = useCallback(async () => {
@@ -357,6 +555,7 @@ export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
     try {
       next = await openCamera();
       streamRef.current = next;
+      setStartedAt(Date.now());
       setStream(next);
       await ensureLoaded();
       await runtime?.start(next);
@@ -364,6 +563,7 @@ export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       next?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      setStartedAt(null);
       setStream(null);
       let message = error instanceof Error ? error.message : String(error);
       if (error instanceof DOMException && ['NotAllowedError', 'SecurityError'].includes(error.name)) {
@@ -381,6 +581,7 @@ export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
 
   const stopCamera = useCallback(() => {
     runtime?.stop();
+    setStartedAt(null);
     setStream((current) => {
       current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -397,24 +598,50 @@ export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
     available,
     isStreaming: stream !== null,
     stream,
+    startedAt,
     startCamera,
     stopCamera,
-  }), [available, stream, startCamera, stopCamera]);
+  }), [available, stream, startedAt, startCamera, stopCamera]);
 
-  return <CameraContext.Provider value={value}>{children}</CameraContext.Provider>;
+  return (
+    <CameraContext.Provider value={value}>
+      <OptionalMediaProvider>{children}</OptionalMediaProvider>
+    </CameraContext.Provider>
+  );
 }
 
 export function OptionalSidebarTrigger() {
   const copy = useCameraCopy();
-  return <Tabs.Trigger value="optional-feature" {...sidebarStyles.bottomTab.trigger}><FiCamera />{copy.label}</Tabs.Trigger>;
+  return <Tabs.Trigger value="optional-feature" {...OPTIONAL_SIDEBAR_STYLES.trigger}><FiCamera />{copy.label}</Tabs.Trigger>;
 }
 
 export function OptionalSidebarContent() {
   const copy = useCameraCopy();
-  const { stream, isStreaming, startCamera, stopCamera } = useCamera();
+  const { stream, startedAt, isStreaming, startCamera, stopCamera } = useCamera();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState('');
+  const [countdown, setCountdown] = useState(0);
   useEffect(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, [stream]);
+  useEffect(() => {
+    if (!stream || startedAt === null) {
+      setCountdown(0);
+      return;
+    }
+
+    const durationMs = 8000;
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((durationMs - (Date.now() - startedAt)) / 1000));
+      setCountdown(remaining);
+      return remaining;
+    };
+
+    if (updateCountdown() === 0) return;
+    const timer = window.setInterval(() => {
+      if (updateCountdown() === 0) window.clearInterval(timer);
+    }, 200);
+
+    return () => window.clearInterval(timer);
+  }, [stream, startedAt]);
   const toggle = async () => {
     try {
       if (isStreaming) stopCamera(); else await startCamera();
@@ -427,16 +654,357 @@ export function OptionalSidebarContent() {
     <Tabs.Content value="optional-feature">
       <Box width="97%" px={4} minH="240px">
         <Tooltip showArrow content={isStreaming ? copy.stopping : copy.control}>
-          <Box height="240px" display="flex" alignItems="center" justifyContent="center" overflow="hidden" cursor="pointer" onClick={toggle} bg="blackAlpha.400" borderRadius="8px">
+          <Box height="240px" position="relative" display="flex" alignItems="center" justifyContent="center" overflow="hidden" cursor="pointer" onClick={toggle} bg="blackAlpha.400" borderRadius="8px">
             {error ? <Text color="red.300" px={4}>{error}</Text> : (
               isStreaming
                 ? <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
                 : <Box textAlign="center"><FiCamera size={24} /><Text>{copy.control}</Text></Box>
             )}
+            {isStreaming && countdown > 0 && (
+              <Box
+                position="absolute"
+                inset={0}
+                bg="rgba(0, 0, 0, 0.3)"
+                display="flex"
+                flexDirection="column"
+                alignItems="center"
+                justifyContent="center"
+                color="white"
+                pointerEvents="none"
+              >
+                <Text fontSize="56px" lineHeight="1" fontWeight="semibold" fontVariantNumeric="tabular-nums" textShadow="0 2px 8px rgba(0, 0, 0, 0.5)">
+                  {countdown}
+                </Text>
+                <Text mt={3} fontSize="md" fontWeight="medium" textShadow="0 1px 5px rgba(0, 0, 0, 0.65)">
+                  {copy.relaxPrompt}
+                </Text>
+              </Box>
+            )}
           </Box>
         </Tooltip>
       </Box>
     </Tabs.Content>
+  );
+}
+
+function ScreenPanel() {
+  const copy = useFeatureCopy();
+  const state = useContext(ScreenCaptureContext);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  if (!state) throw new Error('Screen capture must be inside OptionalFeatureProvider');
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = state.stream;
+  }, [state.stream]);
+
+  const toggle = () => {
+    if (state.isStreaming) state.stopCapture();
+    else void state.startCapture();
+  };
+
+  return (
+    <Tabs.Content value="screen">
+      <Box {...OPTIONAL_SIDEBAR_STYLES.panel}>
+        <Tooltip showArrow content={state.isStreaming ? copy.screenStopping : copy.screenControl}>
+          <Box {...OPTIONAL_SIDEBAR_STYLES.preview} cursor="pointer" onClick={toggle}>
+            {state.error && !state.stream ? <Text color="red.300" px={4}>{state.error}</Text> : (
+              state.stream
+                ? <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <Box textAlign="center"><FiMonitor size={24} /><Text>{copy.screenControl}</Text></Box>
+            )}
+          </Box>
+        </Tooltip>
+      </Box>
+    </Tabs.Content>
+  );
+}
+
+function BrowserPanel() {
+  const copy = useFeatureCopy();
+  const browserView = useContext(BrowserViewContext);
+  return (
+    <Tabs.Content value="browser">
+      <Box {...OPTIONAL_SIDEBAR_STYLES.panel}>
+        <Box {...OPTIONAL_SIDEBAR_STYLES.preview}>
+          {browserView ? (
+            <iframe
+              src={browserView.debuggerFullscreenUrl}
+              title={copy.browserSession}
+              style={{ width: '100%', height: '100%', border: 'none', borderRadius: '8px' }}
+            />
+          ) : (
+            <Box textAlign="center"><FiGlobe size={24} /><Text>{copy.noBrowserSession}</Text></Box>
+          )}
+        </Box>
+      </Box>
+    </Tabs.Content>
+  );
+}
+
+export function OptionalSidebarArea(): JSX.Element | null {
+  const available = useOptionalFeatureAvailability();
+  const copy = useFeatureCopy();
+  const [value, setValue] = useState('optional-feature');
+  if (!available) return null;
+  return (
+    <Tabs.Root
+      value={value}
+      onValueChange={(details) => setValue(details.value)}
+      variant="plain"
+      {...OPTIONAL_SIDEBAR_STYLES.root}
+    >
+      <Tabs.List {...OPTIONAL_SIDEBAR_STYLES.list}>
+        <OptionalSidebarTrigger />
+        <Tabs.Trigger value="screen" {...OPTIONAL_SIDEBAR_STYLES.trigger}>
+          <FiMonitor />{copy.screen}
+        </Tabs.Trigger>
+        <Tabs.Trigger value="browser" {...OPTIONAL_SIDEBAR_STYLES.trigger}>
+          <FiGlobe />{copy.browser}
+        </Tabs.Trigger>
+      </Tabs.List>
+      <OptionalSidebarContent />
+      <ScreenPanel />
+      <BrowserPanel />
+    </Tabs.Root>
+  );
+}
+
+export function useOptionalMediaCapture() {
+  const copy = useFeatureCopy();
+  const screen = useContext(ScreenCaptureContext);
+  if (!screen) throw new Error('Media capture must be inside OptionalFeatureProvider');
+
+  const captureAllMedia = useCallback(async () => {
+    if (!screen.stream) return [];
+    const videoTrack = screen.stream.getVideoTracks()[0];
+    if (!videoTrack) return [];
+    try {
+      const bitmap = await new ImageCapture(videoTrack).grabFrame();
+      const canvas = document.createElement('canvas');
+      let { width, height } = bitmap;
+      const maxWidth = getStoredImageMaxWidth();
+      if (maxWidth > 0 && width > maxWidth) {
+        height = (maxWidth / width) * height;
+        width = maxWidth;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) return [];
+      context.drawImage(bitmap, 0, 0, width, height);
+      return [{
+        source: 'screen' as const,
+        data: canvas.toDataURL('image/jpeg', getStoredImageCompressionQuality()),
+        mime_type: 'image/jpeg',
+      }];
+    } catch (error) {
+      toaster.create({ title: `${copy.screenFailed}: ${error}`, type: 'error', duration: 2000 });
+      return [];
+    }
+  }, [copy, screen.stream]);
+
+  return { captureAllMedia };
+}
+
+function useHeartRateShortcut(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      if (target.isContentEditable || target.closest('[contenteditable="true"], [role="textbox"]')) return true;
+      if (target instanceof HTMLTextAreaElement) return true;
+      if (!(target instanceof HTMLInputElement)) return false;
+      return ['email', 'number', 'password', 'search', 'tel', 'text', 'url'].includes(target.type);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyJ' || event.key.toLowerCase() !== 'j') return;
+      if (event.isComposing || isTypingTarget(event.target)) return;
+      if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+      optionalFeature.requestHeartRateForNextMessage();
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      optionalFeature.clearHeartRateRequest();
+    };
+  }, [enabled]);
+}
+
+export function OptionalFeatureRuntime(): JSX.Element | null {
+  const copy = useFeatureCopy();
+  const { features } = useAccount();
+  const { available, isStreaming, startCamera } = useCamera();
+  const enabled = features.csMode === true;
+  const shownThisSession = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  useHeartRateShortcut(enabled);
+
+  useEffect(() => {
+    if (shownThisSession.current || !enabled || !available || isStreaming) return;
+    shownThisSession.current = true;
+    setOpen(true);
+  }, [available, enabled, isStreaming]);
+
+  if (!enabled) return null;
+  const handleConfirm = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await startCamera();
+    } catch (error) {
+      console.warn('[OptionalFeature] 启动摄像头失败:', error);
+    } finally {
+      setSubmitting(false);
+      setOpen(false);
+    }
+  };
+  return (
+    <DialogRoot open={open} onOpenChange={(details) => {
+      if (!details.open && !submitting) setOpen(false);
+    }} role="alertdialog">
+      <DialogContent>
+        <DialogHeader><DialogTitle>{copy.inviteTitle}</DialogTitle></DialogHeader>
+        <DialogBody><DialogDescription>{copy.inviteDescription}</DialogDescription></DialogBody>
+        <DialogFooter gap={3}>
+          <Button variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>
+            {copy.inviteCancel}
+          </Button>
+          <Button colorPalette="blue" onClick={() => void handleConfirm()} loading={submitting}>
+            {copy.inviteConfirm}
+          </Button>
+        </DialogFooter>
+        <DialogCloseTrigger />
+      </DialogContent>
+    </DialogRoot>
+  );
+}
+
+const CONVERSATION_STARTERS = [
+  { topic: 'english', label: '我想练英语', borderColor: 'blue.400' },
+  { topic: 'psychology', label: '我想学心理学', borderColor: 'blue.400' },
+  { topic: 'story', label: '给我讲个故事', borderColor: 'blue.400' },
+  { topic: 'school', label: '我想聊学校', borderColor: 'purple.400' },
+  { topic: 'relationships', label: '我想聊关系', borderColor: 'purple.400' },
+  { topic: 'work', label: '我想聊工作', borderColor: 'purple.400' },
+] as const;
+
+const PROFILER_CONF_UID = 'profile_analyst_001';
+
+export function OptionalChatHistoryExtras(): JSX.Element | null {
+  const { features } = useAccount();
+  const { messages, currentHistoryUid } = useChatHistory();
+  const { confUid } = useConfig();
+  const { sendTextMessage } = useSendTextMessage();
+  const [pending, setPending] = useState(false);
+  const show = (
+    features.conversationStarters === true
+    && Boolean(currentHistoryUid)
+    && messages.some((message) => message.role === 'ai')
+    && !messages.some((message) => message.role === 'human')
+  );
+  const sendStarter = async (topic: string, label: string) => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await sendTextMessage(label, { optionalPayload: { quick_start_topic: topic } });
+    } finally {
+      setPending(false);
+    }
+  };
+  const sendProfilerStart = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await sendTextMessage('开始侧写');
+    } finally {
+      setPending(false);
+    }
+  };
+
+  if (!show) return null;
+
+  if (confUid === PROFILER_CONF_UID) {
+    return (
+      <Flex px={3} py={3} justify="flex-start">
+        <Button
+          size="sm"
+          variant="outline"
+          color="white"
+          borderColor="purple.400"
+          _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+          disabled={pending}
+          onClick={() => void sendProfilerStart()}
+        >
+          开始侧写
+        </Button>
+      </Flex>
+    );
+  }
+
+  return (
+    <>
+      {[CONVERSATION_STARTERS.slice(0, 3), CONVERSATION_STARTERS.slice(3)].map((row, index) => (
+        <Flex key={index === 0 ? 'starter-row-one' : 'starter-row-two'} wrap="wrap" gap={2} px={3} py={index === 0 ? 3 : 1} justify="flex-start">
+          {row.map(({ topic, label, borderColor }) => (
+            <Button
+              key={topic}
+              size="sm"
+              variant="outline"
+              color="white"
+              borderColor={borderColor}
+              _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+              disabled={pending}
+              onClick={() => void sendStarter(topic, label)}
+            >
+              {label}
+            </Button>
+          ))}
+        </Flex>
+      ))}
+    </>
+  );
+}
+
+export function OptionalGeneralSettings({ onSave, onCancel }: OptionalSettingsCallbacks): JSX.Element | null {
+  const copy = useFeatureCopy();
+  const { features } = useAccount();
+  const [value, setValue] = useState(() => optionalFeature.getEmotionSegmentMinMs());
+  const valueRef = useRef(value);
+  const savedRef = useRef(value);
+  valueRef.current = value;
+
+  useEffect(() => {
+    if (!onSave || !onCancel) return undefined;
+    const removeSave = onSave(() => { savedRef.current = valueRef.current; });
+    const removeCancel = onCancel(() => {
+      setValue(savedRef.current);
+      optionalFeature.setEmotionSegmentMinMs(savedRef.current);
+    });
+    return () => {
+      removeSave?.();
+      removeCancel?.();
+    };
+  }, [onCancel, onSave]);
+
+  if (features.csMode !== true) return null;
+  return (
+    <NumberField
+      label={copy.emotionSegment}
+      value={value}
+      onChange={(nextValue) => {
+        const ms = Number.parseInt(nextValue, 10);
+        if (!Number.isNaN(ms) && ms >= 0 && ms <= 10000) {
+          setValue(ms);
+          optionalFeature.setEmotionSegmentMinMs(ms);
+        }
+      }}
+      min={0}
+      max={10000}
+      step={100}
+      allowMouseWheel
+      help={copy.emotionSegmentHelp}
+    />
   );
 }
 

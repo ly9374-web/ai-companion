@@ -22,6 +22,7 @@ from .routes import (
 )
 from .service_context import ServiceContext
 from .config_manager.utils import Config
+from .optional_features import get_optional_static_mounts, validate_optional_feature
 
 
 # Create a custom StaticFiles class that adds CORS headers
@@ -83,6 +84,9 @@ class WebSocketServer:
     """
 
     def __init__(self, config: Config, default_context_cache: ServiceContext = None):
+        # Validate an installed feature before any routes or account policy are
+        # exposed. A missing directory is valid; a partial installation is not.
+        validate_optional_feature()
         self.app = FastAPI(title="Open-LLM-VTuber Server")  # Added title for clarity
         self.config = config
         self.default_context_cache = (
@@ -148,12 +152,15 @@ class WebSocketServer:
             name="avatars",
         )
 
-        # Mount web tool directory separately from frontend
-        self.app.mount(
-            "/web-tool",
-            CORSStaticFiles(directory="web_tool", html=True),
-            name="web_tool",
-        )
+        for index, mount in enumerate(get_optional_static_mounts()):
+            self.app.mount(
+                mount["route"],
+                CORSStaticFiles(
+                    directory=str(mount["directory"]),
+                    html=mount["html"],
+                ),
+                name=f"optional_feature_static_{index}",
+            )
 
         # Mount main frontend last (as catch-all)
         self.app.mount(

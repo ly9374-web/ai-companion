@@ -3,7 +3,7 @@ import {
   Box, Textarea, IconButton, HStack,
 } from '@chakra-ui/react';
 import { BsMicFill, BsMicMuteFill, BsPaperclip } from 'react-icons/bs';
-import { IoHandRightSharp } from 'react-icons/io5';
+import { LuUndo2 } from 'react-icons/lu';
 import { FiChevronDown } from 'react-icons/fi';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +26,9 @@ interface ToggleButtonProps {
 interface ActionButtonsProps {
   micOn: boolean
   onMicToggle: () => void
-  onInterrupt: () => void
+  onUndo: () => void
+  canUndo: boolean
+  undoPending: boolean
 }
 
 interface MessageInputProps {
@@ -53,35 +55,47 @@ const ToggleButton = memo(({ isCollapsed, onToggle }: ToggleButtonProps) => (
 
 ToggleButton.displayName = 'ToggleButton';
 
-const ActionButtons = memo(({ micOn, onMicToggle, onInterrupt }: ActionButtonsProps) => (
-  <HStack gap={2}>
-    <IconButton
-      aria-label="Toggle microphone"
-      bg={micOn ? 'green.500' : 'red.500'}
-      {...footerStyles.footer.actionButton}
-      tabIndex={-1}
-      onFocus={(event) => event.currentTarget.blur()}
-      onMouseDown={(event) => event.preventDefault()}
-      onKeyDown={(event) => {
-        if (event.code === 'Space') {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      }}
-      onClick={onMicToggle}
-    >
-      {micOn ? <BsMicFill /> : <BsMicMuteFill />}
-    </IconButton>
-    <IconButton
-      aria-label="Raise hand"
-      bg="yellow.500"
-      {...footerStyles.footer.actionButton}
-      onClick={onInterrupt}
-    >
-      <IoHandRightSharp size="24" />
-    </IconButton>
-  </HStack>
-));
+const ActionButtons = memo(({
+  micOn,
+  onMicToggle,
+  onUndo,
+  canUndo,
+  undoPending,
+}: ActionButtonsProps) => {
+  const { t } = useTranslation();
+  return (
+    <HStack gap={2}>
+      <IconButton
+        aria-label="Toggle microphone"
+        bg={micOn ? 'green.500' : 'red.500'}
+        {...footerStyles.footer.actionButton}
+        tabIndex={-1}
+        onFocus={(event) => event.currentTarget.blur()}
+        onMouseDown={(event) => event.preventDefault()}
+        onKeyDown={(event) => {
+          if (event.code === 'Space') {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+        onClick={onMicToggle}
+      >
+        {micOn ? <BsMicFill /> : <BsMicMuteFill />}
+      </IconButton>
+      <IconButton
+        aria-label={t('footer.undoLastMessage')}
+        title={t('footer.undoLastMessage')}
+        bg="yellow.500"
+        {...footerStyles.footer.actionButton}
+        disabled={!canUndo}
+        loading={undoPending}
+        onClick={onUndo}
+      >
+        <LuUndo2 size="24" />
+      </IconButton>
+    </HStack>
+  );
+});
 
 ActionButtons.displayName = 'ActionButtons';
 
@@ -128,7 +142,9 @@ function Footer({ isCollapsed = false, onToggle }: FooterProps): JSX.Element {
     handleKeyPress,
     handleCompositionStart,
     handleCompositionEnd,
-    handleInterrupt,
+    handleUndo,
+    canUndo,
+    undoPending,
     handleMicToggle,
     micOn,
   } = useFooter();
@@ -146,7 +162,9 @@ function Footer({ isCollapsed = false, onToggle }: FooterProps): JSX.Element {
             <ActionButtons
               micOn={micOn}
               onMicToggle={handleMicToggle}
-              onInterrupt={handleInterrupt}
+              onUndo={handleUndo}
+              canUndo={canUndo}
+              undoPending={undoPending}
             />
           </Box>
 

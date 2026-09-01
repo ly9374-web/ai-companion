@@ -1,0 +1,12 @@
+character_config:
+  conf_name: "侧写师"
+  conf_uid: "profile_analyst_001"
+  character_name: "侧写师"
+  avatar: "侧写师.png"
+  persona_prompt_file: "profiler"
+  welcome_message: "你好，我是侧写师。点击下方的“开始侧写”，我会为你开启一场十二轮的危机角色扮演。"
+  expression_dir: "expression_侧写师"
+
+  tts_config:
+    qwen_tts:
+      voice: "qwen-audio-3.0-tts-flash-longfengjinhe"

@@ -1,0 +1,11 @@
+.venv
+.venv.*
+.git
+node_modules
+models
+model
+cache
+logs
+__pycache__
+.history
+.DS_Store

@@ -32,20 +32,18 @@ fi
 
 echo "[INFO] uv version: $(uv --version)"
 
-# Setup virtual environment and install dependencies
-if [ ! -d ".venv" ]; then
-    echo "[INFO] Creating virtual environment..."
-    uv venv --directory "$(pwd)"
-    echo "[INFO] Installing dependencies..."
-    uv sync --directory "$(pwd)"
-else
-    echo "[INFO] Virtual environment found, syncing dependencies..."
-    uv sync --directory "$(pwd)"
+# Use the external virtual environment (kept outside iCloud Desktop)
+export UV_PROJECT_ENVIRONMENT="/Users/jason/.local/share/project-venvs/ai-companion/.venv"
+if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
+    echo "[INFO] External environment missing, recreating from uv.lock..."
+    uv venv --python 3.11 "$UV_PROJECT_ENVIRONMENT"
 fi
+echo "[INFO] Syncing dependencies (frozen, per uv.lock)..."
+uv sync --frozen --directory "$(pwd)"
 
 # Fix sherpa-onnx onnxruntime linking (if needed)
-SHERPA_LIB_DIR=".venv/lib/python3.11/site-packages/sherpa_onnx/lib"
-ONNX_DYLIB=$(ls .venv/lib/python3.11/site-packages/onnxruntime/capi/libonnxruntime.*.dylib 2>/dev/null | head -1)
+SHERPA_LIB_DIR="$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/sherpa_onnx/lib"
+ONNX_DYLIB=$(ls "$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/onnxruntime/capi/"libonnxruntime.*.dylib 2>/dev/null | head -1)
 if [ -n "$ONNX_DYLIB" ]; then
     TARGET_LINK="$SHERPA_LIB_DIR/$(basename "$ONNX_DYLIB")"
     # Always fix the link: remove broken symlink or outdated file, then recreate
@@ -100,4 +98,4 @@ trap cleanup_browser_waiter EXIT INT TERM
 BROWSER_WAITER_PID=$!
 
 # Run the server (pass through all arguments)
-uv run --directory "$(pwd)" run_server.py "$@"
+uv run --frozen --directory "$(pwd)" run_server.py "$@"

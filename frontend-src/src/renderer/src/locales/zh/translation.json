@@ -73,8 +73,7 @@
       "debugMode": "调试",
       "debugModeHelp": "开启后，聊天和滚动摘要仍会正常保存、触发并插入，但不会调用长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这三类总结。",
       "rollingSummary": "滚动摘要",
-      "emotionSegmentMinMs": "表情段最小时长(ms)",
-      "emotionSegmentMinMsHelp": "单段表情连续持续不足此时长则不计入本轮输出（中性段不受此限制）。调小则更多短暂表情被保留，调大则只保留持续较久的表情。范围0-10000，默认1500。"
+      "personaProfile": "侧写"
     },
     "tts": {
       "backgroundImage": "背景图片",
@@ -134,16 +133,11 @@
   },
   "footer": {
     "typeYourMessage": "输入您的消息...",
-    "screenControl": "点击开始屏幕共享",
-    "screenStopping": "点击停止屏幕共享"
+    "undoLastMessage": "撤回上一条消息"
   },
   "sidebar": {
-    "screen": "屏幕",
-    "browser": "浏览器",
     "live": "直播",
-    "noMessages": "暂无消息。开始对话吧！",
-    "noBrowserSession": "无活跃浏览器会话",
-    "browserSession": "浏览器会话"
+    "noMessages": "暂无消息。开始对话吧！"
   },
   "history": {
     "chatHistoryList": "聊天历史列表",
@@ -157,6 +151,8 @@
     "newChatHistory": "新聊天历史已创建",
     "historyDeleteSuccess": "历史记录删除成功",
     "historyDeleteFail": "删除历史记录失败",
+    "undoMessageSuccess": "已撤回上一条消息",
+    "undoMessageEmpty": "没有可撤回的消息",
     "settingsSaved": "设置已保存",
     "manualSummaryRunning": "正在总结长期记忆和短期关系…",
     "manualSummaryComplete": "总结完成，下一次自然总结已重新计数",
@@ -170,16 +166,32 @@
     "rollingSummaryEmpty": "暂无上下文外的聊天可总结",
     "rollingSummaryFailed": "滚动摘要失败，请稍后重试",
     "rollingSummaryDuplicate": "正在生成滚动摘要，无需重复触发",
-    "rollingSummaryDebugOnly": "请先开启调试模式"
+    "rollingSummaryDebugOnly": "请先开启调试模式",
+    "personaProfileStarting": "正在准备用户侧写…",
+    "personaProfileAccepted": "侧写任务已开始，可以继续使用页面",
+    "personaProfileProgress": "总体进度 {{progress}}%",
+    "personaProfileComplete": "用户侧写 {{number}} 已生成",
+    "personaProfileEmpty": "当前用户与角色之间没有可用于侧写的非调试完整对话",
+    "personaProfileDuplicate": "这个用户与角色的侧写任务已经在运行",
+    "personaProfileFailed": "用户侧写生成失败",
+    "personaProfileStep": {
+      "snapshot": "正在冻结并整理非调试聊天快照…",
+      "relationship": "正在生成关系侧写 {{current}}/{{total}}…",
+      "memory": "正在生成记忆档案 {{current}}/{{total}}…",
+      "merge": "正在合并侧写中间稿…",
+      "consolidating": "材料较长，正在进行分层归并 {{current}}/{{total}}…",
+      "persona": "正在生成 persona…",
+      "thinslice": "正在生成并拼接 thinslice…",
+      "complete": "正在保存编号侧写…",
+      "running": "正在生成用户侧写…"
+    }
   },
   "error": {
-    "failedStartScreenCapture": "启动屏幕捕获失败",
     "failedStartVAD": "启动语音活动检测失败",
     "llmCantHear": "AI无法听到您的声音",
     "audioPlayback": "音频播放错误",
     "enterValidUuid": "请输入有效的UUID",
     "cannotDeleteCurrentHistory": "无法删除当前聊天记录",
-    "failedCapture": "捕获{{source}}帧失败",
     "failedParseWebSocket": "解析WebSocket消息失败",
     "websocketNotOpen": "WebSocket未连接",
     "deepseekApiKeyRequired": "请先在设置 → Key 中填写 DeepSeek Key",
@@ -222,11 +234,5 @@
     "completeDescription": "{{name}} 已加入角色列表。",
     "failedTitle": "角色生成失败",
     "failedDescription": "请稍后重试"
-  },
-  "cameraInvite": {
-    "title": "开启摄像头？",
-    "description": "检测到当前账号支持表情识别，是否立即打开摄像头采集你的表情基线？",
-    "confirm": "开启摄像头",
-    "cancel": "取消"
   }
 }

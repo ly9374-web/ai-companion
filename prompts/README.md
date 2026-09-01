@@ -4,10 +4,11 @@
 
 打开该 YAML 后可直接修改：
 
-- `chat.characters.algernon.system_prompt`：Algernon 完整 system prompt。
-- `chat.characters.liya.system_prompt`：莉娅完整 system prompt。
-- `chat.characters.generated_default.system_prompt`：新增角色的统一初始 system prompt。
-- `chat.characters.cuige.system_prompt`：崔格完整 system prompt。
+- `chat.characters.algernon.system_prompt`：Algernon 人物设定。
+- `chat.characters.liya.system_prompt`：莉娅人物设定。
+- `chat.characters.generated_default.system_prompt`：新增角色的统一初始人物设定。
+- `chat.characters.cuige.system_prompt`：崔格人物设定。
+- `chat.character_output_rules`：统一追加到所有角色 system prompt 末尾的声音、表情和情绪输出规则。
 - `chat.user_prompt`：普通聊天当轮完整 user prompt 结构。
 - `chat.contexts`：长期记忆、长期关系和短期关系的包装文本与插入位置。
 - `summaries`：三种总结调用各自完整的 system prompt 和 user prompt。

@@ -17,7 +17,6 @@ import { useChatHistory } from '@/context/chat-history-context';
 import { toaster } from '@/components/ui/toaster';
 import { useVAD } from '@/context/vad-context';
 import { AiState, useAiState } from "@/context/ai-state-context";
-import { useBrowser } from '@/context/browser-context';
 import {
   getStoredQwenTtsOptions,
   getStoredTtsInstructionPreset,
@@ -32,6 +31,7 @@ import {
   MANUAL_SUMMARY_TOAST_ID,
   ROLLING_SUMMARY_TOAST_ID,
 } from '@/constants/manual-summary';
+import { PERSONA_PROFILE_TOAST_ID } from '@/constants/persona-profile';
 import {
   getCurrentBaseUrl,
   getCurrentWsUrl,
@@ -48,7 +48,13 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { aiState, setAiState, backendSynthComplete, setBackendSynthComplete } = useAiState();
   const { setModelInfo } = useLive2DConfig();
   const { setSubtitleText } = useSubtitle();
-  const { clearResponse, setForceNewMessage, appendHumanMessage, appendOrUpdateToolCallMessage } = useChatHistory();
+  const {
+    clearResponse,
+    setForceNewMessage,
+    appendHumanMessage,
+    appendOrUpdateToolCallMessage,
+    setUndoPending,
+  } = useChatHistory();
   const { addAudioTask } = useAudioTask();
   const bgUrlContext = useBgUrl();
   const {
@@ -61,7 +67,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const [pendingModelInfo, setPendingModelInfo] = useState<ModelInfo | undefined>(undefined);
   const { startMic, stopMic, autoStartMicOnConvEnd } = useVAD();
   const autoStartMicOnConvEndRef = useRef(autoStartMicOnConvEnd);
-  const { setBrowserViewData } = useBrowser();
+  const profilerFinalPendingRef = useRef(false);
 
   const setWsUrl = useCallback((url: string) => {
     setCurrentWsUrl(url);
@@ -105,6 +111,17 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         break;
       case 'conversation-chain-end':
         audioTaskQueue.addTask(() => new Promise<void>((resolve) => {
+          optionalFeature.onConversationEnd();
+          if (profilerFinalPendingRef.current) {
+            profilerFinalPendingRef.current = false;
+            setAiState('loading');
+            wsService.sendMessage({
+              type: 'profiler-finalize',
+              optional_contexts: optionalFeature.consumeAssistantResponse(),
+            });
+            resolve();
+            return;
+          }
           setAiState((currentState: AiState) => {
             if (currentState === 'thinking-speaking') {
               // Auto start mic if enabled
@@ -115,7 +132,6 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             }
             return currentState;
           });
-          optionalFeature.onConversationEnd();
           resolve();
         }));
         break;
@@ -265,6 +281,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         });
         break;
       case 'new-history-created':
+        profilerFinalPendingRef.current = false;
         setAiState('idle');
         setSubtitleText(t('notification.newConversation'));
         // No need to open mic here
@@ -291,6 +308,59 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           });
         }
         break;
+      case 'profiler-final-round-ready':
+        profilerFinalPendingRef.current = true;
+        break;
+      case 'profiler-analysis-status': {
+        const status = message.status;
+        if (status === 'accepted' || status === 'running') {
+          setAiState('loading');
+          const toastOptions = {
+            title: status === 'accepted' ? '12轮侧写已完成，正在整理分析材料' : 'DeepSeek 正在生成心理侧写',
+            description: typeof message.progress === 'number'
+              ? `进度 ${message.progress}%`
+              : undefined,
+            type: 'loading' as const,
+          };
+          if (toaster.isVisible('profiler-analysis')) {
+            toaster.update('profiler-analysis', toastOptions);
+          } else {
+            toaster.create({ id: 'profiler-analysis', ...toastOptions });
+          }
+          break;
+        }
+        setAiState('idle');
+        if (status === 'success') {
+          const toastOptions = {
+            title: '心理侧写报告已生成',
+            description: message.path,
+            type: 'success' as const,
+            duration: 6000,
+          };
+          if (toaster.isVisible('profiler-analysis')) {
+            toaster.update('profiler-analysis', toastOptions);
+          } else {
+            toaster.create({ id: 'profiler-analysis', ...toastOptions });
+          }
+          window.dispatchEvent(new CustomEvent('profiler-analysis-complete', { detail: {
+            content: message.content || '',
+            path: message.path || '',
+          }}));
+          break;
+        }
+        const toastOptions = {
+          title: status === 'duplicate' ? '心理侧写报告正在生成中' : '心理侧写报告生成失败',
+          description: message.error,
+          type: status === 'duplicate' ? 'info' as const : 'error' as const,
+          duration: 6000,
+        };
+        if (toaster.isVisible('profiler-analysis')) {
+          toaster.update('profiler-analysis', toastOptions);
+        } else {
+          toaster.create({ id: 'profiler-analysis', ...toastOptions });
+        }
+        break;
+      }
       case 'history-deleted':
         toaster.create({
           title: message.success
@@ -299,6 +369,30 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           type: message.success ? 'success' : 'error',
           duration: 2000,
         });
+        break;
+      case 'undo-last-message-result':
+        setUndoPending(false);
+        setAiState('idle');
+        if (message.success) {
+          setMessages(message.messages || []);
+          if (message.histories) {
+            setHistoryList(message.histories);
+          }
+          clearResponse();
+          setForceNewMessage(true);
+          setSubtitleText('');
+          toaster.create({
+            title: t('notification.undoMessageSuccess'),
+            type: 'success',
+            duration: 1800,
+          });
+        } else {
+          toaster.create({
+            title: t('notification.undoMessageEmpty'),
+            type: 'info',
+            duration: 1800,
+          });
+        }
         break;
       case 'history-list':
         if (message.histories) {
@@ -315,6 +409,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         }
         break;
       case 'error':
+        setUndoPending(false);
         toaster.create({
           title: message.message,
           type: 'error',
@@ -327,6 +422,41 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             ? 'error.grokApiKeyRequired'
             : 'error.deepseekApiKeyRequired',
         );
+        if (message.request_type === 'profiler-finalize') {
+          setAiState('idle');
+          if (toaster.isVisible('profiler-analysis')) {
+            toaster.update('profiler-analysis', {
+              title: apiKeyRequiredTitle,
+              type: 'error',
+              duration: 3000,
+            });
+          } else {
+            toaster.create({
+              id: 'profiler-analysis',
+              title: apiKeyRequiredTitle,
+              type: 'error',
+              duration: 3000,
+            });
+          }
+          break;
+        }
+        if (message.request_type === 'generate-persona-profile') {
+          if (toaster.isVisible(PERSONA_PROFILE_TOAST_ID)) {
+            toaster.update(PERSONA_PROFILE_TOAST_ID, {
+              title: apiKeyRequiredTitle,
+              type: 'error',
+              duration: 3000,
+            });
+          } else {
+            toaster.create({
+              id: PERSONA_PROFILE_TOAST_ID,
+              title: apiKeyRequiredTitle,
+              type: 'error',
+              duration: 3000,
+            });
+          }
+          break;
+        }
         if (toaster.isVisible(ROLLING_SUMMARY_TOAST_ID)) {
           toaster.update(ROLLING_SUMMARY_TOAST_ID, {
             title: apiKeyRequiredTitle,
@@ -337,6 +467,14 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         }
         if (toaster.isVisible(MANUAL_SUMMARY_TOAST_ID)) {
           toaster.update(MANUAL_SUMMARY_TOAST_ID, {
+            title: apiKeyRequiredTitle,
+            type: 'error',
+            duration: 3000,
+          });
+          break;
+        }
+        if (toaster.isVisible(PERSONA_PROFILE_TOAST_ID)) {
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
             title: apiKeyRequiredTitle,
             type: 'error',
             duration: 3000,
@@ -414,6 +552,75 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         });
         break;
       }
+      case 'persona-profile-status': {
+        const status = message.status;
+        if (status === 'accepted') {
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
+            title: t('notification.personaProfileAccepted'),
+            type: 'loading',
+          });
+          break;
+        }
+        if (status === 'running') {
+          const stepKey = [
+            'snapshot',
+            'relationship',
+            'memory',
+            'merge',
+            'consolidating',
+            'persona',
+            'thinslice',
+            'complete',
+          ].includes(message.step)
+            ? message.step
+            : 'running';
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
+            title: t(`notification.personaProfileStep.${stepKey}`, {
+              current: message.current,
+              total: message.total,
+            }),
+            description: typeof message.progress === 'number'
+              ? t('notification.personaProfileProgress', { progress: message.progress })
+              : undefined,
+            type: 'loading',
+          });
+          break;
+        }
+        if (status === 'success') {
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
+            title: t('notification.personaProfileComplete', {
+              number: message.profile_number,
+            }),
+            description: message.path,
+            type: 'success',
+            duration: 6000,
+          });
+          break;
+        }
+        if (status === 'empty') {
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
+            title: t('notification.personaProfileEmpty'),
+            type: 'info',
+            duration: 3000,
+          });
+          break;
+        }
+        if (status === 'duplicate') {
+          toaster.update(PERSONA_PROFILE_TOAST_ID, {
+            title: t('notification.personaProfileDuplicate'),
+            type: 'info',
+            duration: 3000,
+          });
+          break;
+        }
+        toaster.update(PERSONA_PROFILE_TOAST_ID, {
+          title: t('notification.personaProfileFailed'),
+          description: message.error,
+          type: 'error',
+          duration: 6000,
+        });
+        break;
+      }
       case 'system-prompt':
         // Backend returned the editable system prompt section (or an error).
         window.dispatchEvent(new CustomEvent('system-prompt', { detail: {
@@ -451,13 +658,8 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         setForceNewMessage(true);
         break;
       case 'tool_call_status':
+        optionalFeature.handleWebSocketMessage(message);
         if (message.tool_id && message.tool_name && message.status) {
-          // If there's browser view data included, store it in the browser context
-          if (message.browser_view) {
-            console.log('Browser view data received:', message.browser_view);
-            setBrowserViewData(message.browser_view);
-          }
-
           appendOrUpdateToolCallMessage({
             id: message.tool_id,
             type: 'tool_call_status',
@@ -476,7 +678,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
       default:
         console.warn('Unknown message type:', message.type);
     }
-  }, [aiState, addAudioTask, appendHumanMessage, baseUrl, bgUrlContext, confName, setAiState, setConfName, setConfUid, setConfigFiles, setCurrentHistoryUid, setHistoryList, setMessages, setModelInfo, setSubtitleText, startMic, stopMic, backendSynthComplete, setBackendSynthComplete, clearResponse, handleControlMessage, appendOrUpdateToolCallMessage, setBrowserViewData, t]);
+  }, [aiState, addAudioTask, appendHumanMessage, baseUrl, bgUrlContext, confName, setAiState, setConfName, setConfUid, setConfigFiles, setCurrentHistoryUid, setHistoryList, setMessages, setModelInfo, setSubtitleText, startMic, stopMic, backendSynthComplete, setBackendSynthComplete, clearResponse, handleControlMessage, appendOrUpdateToolCallMessage, t]);
 
   useEffect(() => {
     wsService.connect(wsUrl);

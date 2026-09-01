@@ -2,19 +2,34 @@ const fs = require('fs');
 const path = require('path');
 
 const projectRoot = path.resolve(__dirname, '..');
-const optionalUsageDescriptions = fs.readdirSync(projectRoot, { withFileTypes: true })
+const optionalFeatureDescriptors = fs.readdirSync(projectRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => path.join(projectRoot, entry.name, 'optional-feature.json'))
-  .filter((descriptorPath) => fs.existsSync(descriptorPath))
-  .flatMap((descriptorPath) => {
-    try {
-      const descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
-      return Object.entries(descriptor.electron_mac_usage_descriptions || {})
-        .map(([key, value]) => ({ [key]: value }));
-    } catch (_error) {
-      return [];
+  .filter((descriptorPath) => fs.existsSync(descriptorPath));
+if (optionalFeatureDescriptors.length > 1) {
+  throw new Error(`Expected at most one optional feature, found: ${optionalFeatureDescriptors.join(', ')}`);
+}
+const optionalUsageDescriptions = optionalFeatureDescriptors.flatMap((descriptorPath) => {
+  let descriptor;
+  try {
+    descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Cannot read optional feature descriptor: ${descriptorPath}`, { cause: error });
+  }
+  if (!descriptor || typeof descriptor.id !== 'string' || !descriptor.id.trim()) {
+    throw new Error(`Optional feature id is missing: ${descriptorPath}`);
+  }
+  const descriptions = descriptor.electron_mac_usage_descriptions || {};
+  if (typeof descriptions !== 'object' || Array.isArray(descriptions)) {
+    throw new Error(`Optional feature electron_mac_usage_descriptions is invalid: ${descriptorPath}`);
+  }
+  return Object.entries(descriptions).map(([key, value]) => {
+    if (typeof value !== 'string') {
+      throw new Error(`Optional feature mac usage description ${key} must be a string`);
     }
+    return { [key]: value };
   });
+});
 
 module.exports = {
   extends: './electron-builder.yml',

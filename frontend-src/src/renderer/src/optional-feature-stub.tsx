@@ -7,6 +7,14 @@ export const optionalFeature = {
   beginProactiveSpeak: (): void => {},
   onConversationStart: (): void => {},
   onConversationEnd: (): void => {},
+  onAssistantAudioStart: (_detail: { text: string }): void => {},
+  onAssistantAudioEnd: (_detail: {
+    text: string;
+    interrupted: boolean;
+    playbackRatio: number;
+  }): void => {},
+  consumeAssistantResponse: (): Record<string, unknown> | null => null,
+  handleWebSocketMessage: (_message: unknown): void => {},
   getEmotionSegmentMinMs: (): number => 1500,
   setEmotionSegmentMinMs: (_ms: number): void => {},
 };
@@ -15,32 +23,37 @@ export function useOptionalFeatureAvailability(): boolean {
   return false;
 }
 
-// Safe no-op defaults so callers (e.g. CameraInviteDialog) can render even
-// when the optional camera module is not installed; `available` stays false
-// so any "open camera" affordances are suppressed.
-export function useCamera() {
-  return {
-    available: false,
-    isStreaming: false,
-    stream: null as MediaStream | null,
-    startCamera: async (): Promise<void> => {},
-    stopCamera: (): void => {},
-  };
-}
-
 export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
   return children;
 }
 
-export function OptionalSidebarTrigger(): JSX.Element | null {
+export function OptionalFeatureRuntime(): JSX.Element | null {
   return null;
 }
 
-export function OptionalSidebarContent(): JSX.Element | null {
+export function OptionalSidebarArea(): JSX.Element | null {
   return null;
 }
 
-// 设置抽屉里的“一眸”挂载点：无摄像头模块时不渲染任何内容。
+export function OptionalChatHistoryExtras(): JSX.Element | null {
+  return null;
+}
+
+export function OptionalGeneralSettings(_props: {
+  onSave?: (callback: () => void) => () => void;
+  onCancel?: (callback: () => void) => () => void;
+}): JSX.Element | null {
+  return null;
+}
+
+export function useOptionalMediaCapture() {
+  return { captureAllMedia: async () => [] as Array<{
+    source: 'screen';
+    data: string;
+    mime_type: string;
+  }> };
+}
+
 export function OptionalSettingsTrigger(): JSX.Element | null {
   return null;
 }

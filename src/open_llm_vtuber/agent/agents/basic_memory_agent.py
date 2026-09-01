@@ -603,12 +603,16 @@ class BasicMemoryAgent(AgentInterface):
     async def summarize_long_term_memory(
         self,
         turns: List[Dict[str, str]],
+        character_system_prompt: str = "",
+        browser_time: str = "",
     ) -> str:
         """Use the configured DeepSeek model for one memory-analysis request."""
         system_prompt = prompt_builder.load_summary_prompt("long_term_memory")
 
         summary_input = prompt_builder.build_long_term_memory_summary_input(
             recent_turns=turns,
+            character_system_prompt=character_system_prompt,
+            browser_time=browser_time,
         )
         messages = [
             {
@@ -738,6 +742,37 @@ class BasicMemoryAgent(AgentInterface):
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
         return raw_output
+
+    async def generate_persona_profile_section(
+        self,
+        prompt_name: str,
+        user_prompt: str,
+    ) -> str:
+        """Generate one human-profile artifact with the DeepSeek summary model."""
+        allowed_prompts = {
+            "persona_profile_relationship",
+            "persona_profile_memory",
+            "persona_profile_consolidate",
+            "persona_profile_persona",
+            "persona_profile_thinslice",
+            "profiler_thinslice",
+        }
+        if prompt_name not in allowed_prompts:
+            raise ValueError("Unsupported persona profile prompt")
+        system_prompt = prompt_builder.load_summary_prompt(prompt_name)
+        messages = [{"role": "user", "content": user_prompt}]
+        chunks: List[str] = []
+        async for event in self._summary_llm.chat_completion(
+            messages, system_prompt
+        ):
+            if isinstance(event, str):
+                chunks.append(event)
+            elif isinstance(event, dict) and event.get("type") == "text_delta":
+                chunks.append(event.get("text", ""))
+        output = "".join(chunks).strip()
+        if not output:
+            raise RuntimeError("侧写模型返回了空内容")
+        return output
 
     async def _openai_tool_interaction_loop(
         self,

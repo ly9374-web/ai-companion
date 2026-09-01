@@ -14,6 +14,7 @@ from .types import ToolCallObject
 from .mcp_client import MCPClient
 from .tool_manager import ToolManager
 from prompts import prompt_builder
+from ..optional_features import augment_optional_tool_status
 
 
 class ToolExecutor:
@@ -286,14 +287,12 @@ class ToolExecutor:
                 + "Z",
             }
 
-            # For stagehand_navigate tool, include browser view links if available
-            if tool_name == "stagehand_navigate" and not is_error:
-                live_view_data = metadata.get("liveViewData", {})
-                if live_view_data:
-                    logger.info(
-                        f"Found live view data for stagehand_navigate: {live_view_data}"
-                    )
-                    status_update["browser_view"] = live_view_data
+            status_update = augment_optional_tool_status(
+                tool_name,
+                is_error,
+                metadata,
+                status_update,
+            )
 
             yield status_update
 

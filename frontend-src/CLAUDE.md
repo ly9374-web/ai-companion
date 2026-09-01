@@ -41,7 +41,7 @@ npm run extract-translations  # Extract i18n strings
 This is an Electron + React application for an AI VTuber system with Live2D integration. The architecture consists of:
 
 ### Main Process (`src/main/`)
-- **index.ts**: Entry point, sets up IPC handlers for window management, mouse events, and screen capture
+- **index.ts**: Entry point, sets up core IPC handlers and delegates optional IPC setup through the removable feature boundary
 - **window-manager.ts**: Manages window state, modes (window/pet), and window properties
 - **menu-manager.ts**: Handles system tray and context menus
 
@@ -80,7 +80,7 @@ The app uses React Context for state management with multiple specialized contex
 - Live2D character animation with expressions and lip sync
 - Multi-language support (i18n)
 - Group/collaborative sessions
-- Screen capture support
+- Removable feature integration through `@optional-feature` and `@optional-feature-main` aliases
 - Customizable backgrounds and UI themes
 
 ## Important Notes

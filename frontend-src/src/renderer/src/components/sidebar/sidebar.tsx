@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { sidebarStyles } from './sidebar-styles';
 import SettingUI from './setting/setting-ui';
 import ChatHistoryPanel from './chat-history-panel';
-import BottomTab from './bottom-tab';
+import { OptionalSidebarArea } from '@optional-feature';
 import HistoryDrawer from './history-drawer';
 import { useSidebar } from '@/hooks/sidebar/use-sidebar';
 import { ModeType } from '@/context/mode-context';
@@ -389,7 +389,7 @@ const SidebarContent = memo(({
       />
     </Box>
     <ChatHistoryPanel />
-    <BottomTab />
+    <OptionalSidebarArea />
   </Box>
 ));
 

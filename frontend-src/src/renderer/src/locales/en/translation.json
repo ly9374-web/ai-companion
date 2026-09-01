@@ -73,8 +73,7 @@
       "debugMode": "Debug",
       "debugModeHelp": "When enabled, chats and rolling summaries are still saved, triggered, and injected, but long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be added to those three summaries later after debug mode is disabled.",
       "rollingSummary": "Rolling Summary",
-      "emotionSegmentMinMs": "Min Expression Segment (ms)",
-      "emotionSegmentMinMsHelp": "A continuous expression segment shorter than this is excluded from the turn output (neutral segments are exempt). Lower values retain more brief expressions; higher values keep only sustained ones. Range 0-10000; default 1500."
+      "personaProfile": "Profile"
     },
     "tts": {
       "backgroundImage": "Background Image",
@@ -134,16 +133,11 @@
   },
   "footer": {
     "typeYourMessage": "Type your message...",
-    "screenControl": "Click to start screen capture",
-    "screenStopping": "Click to stop screen capture"
+    "undoLastMessage": "Undo last message"
   },
   "sidebar": {
-    "screen": "Screen",
-    "browser": "Browser",
     "live": "Live",
-    "noMessages": "No messages yet. Start a conversation!",
-    "noBrowserSession": "No active browser session",
-    "browserSession": "Browser Session"
+    "noMessages": "No messages yet. Start a conversation!"
   },
   "history": {
     "chatHistoryList": "Chat History List",
@@ -157,6 +151,8 @@
     "newChatHistory": "New chat history created",
     "historyDeleteSuccess": "History deleted successfully",
     "historyDeleteFail": "Failed to delete history",
+    "undoMessageSuccess": "Last message undone",
+    "undoMessageEmpty": "No message to undo",
     "settingsSaved": "Settings saved",
     "manualSummaryRunning": "Summarizing long-term memory and short-term relationship…",
     "manualSummaryComplete": "Summary complete; the next automatic summary starts from zero",
@@ -170,16 +166,32 @@
     "rollingSummaryEmpty": "No chat outside the direct context is available to summarize",
     "rollingSummaryFailed": "Rolling summary failed. Please try again later",
     "rollingSummaryDuplicate": "A rolling summary is already running",
-    "rollingSummaryDebugOnly": "Enable debug mode first"
+    "rollingSummaryDebugOnly": "Enable debug mode first",
+    "personaProfileStarting": "Preparing the user profile…",
+    "personaProfileAccepted": "Profile generation started; you can keep using the app",
+    "personaProfileProgress": "Overall progress: {{progress}}%",
+    "personaProfileComplete": "User profile {{number}} generated",
+    "personaProfileEmpty": "No complete non-debug conversations are available for this user and character",
+    "personaProfileDuplicate": "A profile job is already running for this user and character",
+    "personaProfileFailed": "User profile generation failed",
+    "personaProfileStep": {
+      "snapshot": "Freezing and preparing the non-debug chat snapshot…",
+      "relationship": "Generating relationship profile {{current}}/{{total}}…",
+      "memory": "Generating memory profile {{current}}/{{total}}…",
+      "merge": "Merging profile drafts…",
+      "consolidating": "The archive is long; consolidating {{current}}/{{total}}…",
+      "persona": "Generating persona…",
+      "thinslice": "Generating and appending thinslice…",
+      "complete": "Saving the numbered profile…",
+      "running": "Generating the user profile…"
+    }
   },
   "error": {
-    "failedStartScreenCapture": "Failed to start screen capture",
     "failedStartVAD": "Failed to start VAD",
     "llmCantHear": "The LLM can't hear you.",
     "audioPlayback": "Audio playback error",
     "enterValidUuid": "Please enter a valid UUID",
     "cannotDeleteCurrentHistory": "Cannot delete current chat history",
-    "failedCapture": "Failed to capture {{source}} frame",
     "failedParseWebSocket": "Failed to parse WebSocket message",
     "websocketNotOpen": "WebSocket is not open.",
     "deepseekApiKeyRequired": "Add your DeepSeek Key in Settings → Key before sending a message.",
@@ -222,11 +234,5 @@
     "completeDescription": "{{name}} has been added to the character list.",
     "failedTitle": "Character generation failed",
     "failedDescription": "Please try again later"
-  },
-  "cameraInvite": {
-    "title": "Enable Camera?",
-    "description": "This account supports emotion recognition. Open the camera now to capture your expression baseline?",
-    "confirm": "Enable Camera",
-    "cancel": "Cancel"
   }
 }

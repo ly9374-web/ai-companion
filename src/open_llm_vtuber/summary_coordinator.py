@@ -68,15 +68,28 @@ class SummaryCoordinator:
             finally:
                 self._running_label = None
 
-    async def close(self) -> None:
+    async def cancel_all(self) -> set[str]:
+        """Cancel running and queued work, returning every affected label."""
+        labels = {job.label for job in self._jobs}
+        if self._running_label:
+            labels.add(self._running_label)
+
         while self._jobs:
             job = self._jobs.popleft()
             if not job.future.done():
                 job.future.cancel()
-        if self._worker and not self._worker.done():
-            self._worker.cancel()
+
+        worker = self._worker
+        if worker and not worker.done():
+            worker.cancel()
             try:
-                await self._worker
+                await worker
             except asyncio.CancelledError:
                 pass
+
         self._worker = None
+        self._running_label = None
+        return labels
+
+    async def close(self) -> None:
+        await self.cancel_all()

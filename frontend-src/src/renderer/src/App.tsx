@@ -11,7 +11,10 @@ import { SubtitleProvider } from "./context/subtitle-context";
 import { BgUrlProvider } from "./context/bgurl-context";
 import { layoutStyles } from "./layout";
 import WebSocketHandler from "./services/websocket-handler";
-import { OptionalFeatureProvider } from "@optional-feature";
+import {
+  OptionalFeatureProvider,
+  OptionalFeatureRuntime,
+} from "@optional-feature";
 import { ChatHistoryProvider } from "./context/chat-history-context";
 import { CharacterConfigProvider } from "./context/character-config-context";
 import { Toaster } from "./components/ui/toaster";
@@ -20,20 +23,17 @@ import { Live2D } from "./components/canvas/live2d";
 import TitleBar from "./components/electron/title-bar";
 import { InputSubtitle } from "./components/electron/input-subtitle";
 import { ProactiveSpeakProvider } from "./context/proactive-speak-context";
-import { ScreenCaptureProvider } from "./context/screen-capture-context";
-import { BrowserProvider } from "./context/browser-context";
 // eslint-disable-next-line import/no-extraneous-dependencies, import/newline-after-import
 import "@chatscope/chat-ui-kit-styles/dist/default/styles.min.css";
 import Background from "./components/canvas/background";
 import WebSocketStatus from "./components/canvas/ws-status";
 import { ModeProvider, useMode } from "./context/mode-context";
 import { useSpaceToTalk } from "./hooks/utils/use-space-to-talk";
-import { useHeartRateShortcut } from "./hooks/utils/use-heart-rate-shortcut";
 import { useManualSummary } from "./hooks/utils/use-manual-summary";
 import { AccountProvider, useAccount } from "./context/account-context";
 import LoginScreen from "./components/account/login-screen";
-import { CameraInviteDialog } from "./components/account/camera-invite-dialog";
 import { CharacterGenerationMonitor } from "./components/character/character-generation-monitor";
+import { ProfilerReportDialog } from "./components/profiler/profiler-report-dialog";
 
 function AppContent(): JSX.Element {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -42,7 +42,6 @@ function AppContent(): JSX.Element {
   const isElectron = window.api !== undefined;
   const live2dContainerRef = useRef<HTMLDivElement>(null);
   useSpaceToTalk();
-  useHeartRateShortcut();
   useManualSummary();
 
   useEffect(() => {
@@ -177,32 +176,29 @@ function AppWithGlobalStyles(): JSX.Element {
   return (
     <Box key={account}>
       <OptionalFeatureProvider>
-        <CameraInviteDialog />
-        <ScreenCaptureProvider>
-          <CharacterConfigProvider>
-            <ChatHistoryProvider>
-              <AiStateProvider>
-                <ProactiveSpeakProvider>
-                  <Live2DConfigProvider>
-                    <SubtitleProvider>
-                      <VADProvider>
-                        <BgUrlProvider>
-                          <BrowserProvider>
-                            <WebSocketHandler>
-                              <Toaster />
-                              <CharacterGenerationMonitor />
-                              <AppContent />
-                            </WebSocketHandler>
-                          </BrowserProvider>
-                        </BgUrlProvider>
-                      </VADProvider>
-                    </SubtitleProvider>
-                  </Live2DConfigProvider>
-                </ProactiveSpeakProvider>
-              </AiStateProvider>
-            </ChatHistoryProvider>
-          </CharacterConfigProvider>
-        </ScreenCaptureProvider>
+        <OptionalFeatureRuntime />
+        <CharacterConfigProvider>
+          <ChatHistoryProvider>
+            <AiStateProvider>
+              <ProactiveSpeakProvider>
+                <Live2DConfigProvider>
+                  <SubtitleProvider>
+                    <VADProvider>
+                      <BgUrlProvider>
+                        <WebSocketHandler>
+                          <Toaster />
+                          <CharacterGenerationMonitor />
+                          <ProfilerReportDialog />
+                          <AppContent />
+                        </WebSocketHandler>
+                      </BgUrlProvider>
+                    </VADProvider>
+                  </SubtitleProvider>
+                </Live2DConfigProvider>
+              </ProactiveSpeakProvider>
+            </AiStateProvider>
+          </ChatHistoryProvider>
+        </CharacterConfigProvider>
       </OptionalFeatureProvider>
     </Box>
   );

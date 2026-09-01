@@ -40,12 +40,11 @@ from .summary_coordinator import SummaryCoordinator
 from .account_manager import (
     ensure_character_profile,
     get_account_history_root,
-    has_conversation_starters,
-    isolates_conversation_context,
     read_system_prompt_override,
     write_system_prompt_override,
     delete_system_prompt_override,
 )
+from .optional_features import get_optional_account_policy
 from .long_term_memory_manager import LongTermMemoryManager
 from .long_term_relationship_manager import LongTermRelationshipManager
 from .short_term_relationship_manager import ShortTermRelationshipManager
@@ -102,7 +101,6 @@ class ServiceContext:
 
         self.history_uid: str = ""
         self.account_name: str = ""
-        self.conversation_starters_enabled = False
         # Whether the user selected the English conversation starter, so every
         # subsequent user prompt is steered to expect an English reply.
         self.english_mode: bool = False
@@ -140,9 +138,9 @@ class ServiceContext:
     def configure_account(self, account_name: str) -> None:
         """Scope every persistent conversation service to one local account."""
         self.account_name = account_name
-        self.conversation_starters_enabled = has_conversation_starters(account_name)
-        self.isolated_conversation_context = isolates_conversation_context(
-            account_name
+        feature_policy = get_optional_account_policy(account_name)
+        self.isolated_conversation_context = bool(
+            feature_policy.get("isolated_conversation_context", False)
         )
         self.history_root = get_account_history_root(account_name)
         ensure_character_profile(account_name, self.character_config.conf_uid)
@@ -772,7 +770,10 @@ class ServiceContext:
 
         override = self._read_override()
         if override is not None and override.strip():
-            editable = override.strip()
+            # Hand-edited legacy override files may still contain an older copy
+            # of the fixed output rules. Keep only their persona section; the
+            # current canonical rules are always appended below.
+            editable, _legacy_fixed = self._split_editable_and_fixed(override)
         else:
             editable = default_editable
 
@@ -800,7 +801,7 @@ class ServiceContext:
             raise RuntimeError("Cannot update system prompt without an active agent")
         account, conf_uid = self._resolve_account_and_conf_uid()
 
-        editable = content.strip()
+        editable, _fixed = self._split_editable_and_fixed(content)
         write_system_prompt_override(account, conf_uid, editable)
 
         _editable, fixed, full = self._compose_effective_system_prompt()

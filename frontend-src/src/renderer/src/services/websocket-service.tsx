@@ -79,6 +79,8 @@ export interface MessageEvent {
   messages?: Message[];
   history_uid?: string;
   success?: boolean;
+  removed_role?: 'human' | 'ai';
+  summary_rebuild_started?: boolean;
   histories?: HistoryInfo[];
   configs?: ConfigFile[];
   message?: string;
@@ -91,24 +93,17 @@ export interface MessageEvent {
   long_term_memory?: string;
   short_term_relationship?: string;
   provider?: 'deepseek' | 'grok';
-  browser_view?: {
-    debuggerFullscreenUrl: string;
-    debuggerUrl: string;
-    pages: {
-      id: string;
-      url: string;
-      faviconUrl: string;
-      title: string;
-      debuggerUrl: string;
-      debuggerFullscreenUrl: string;
-    }[];
-    wsUrl: string;
-    sessionId?: string;
-  };
   // System prompt editor: editable section sent from backend, plus success/error
   // flags for update/reset responses.
   content?: string;
   error?: string;
+  path?: string;
+  progress?: number;
+  round?: number;
+  step?: string;
+  current?: number;
+  total?: number;
+  request_type?: string;
 }
 
 // Get translation function for error messages

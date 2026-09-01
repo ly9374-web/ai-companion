@@ -27,6 +27,12 @@ from ..chat_history_manager import (
 )
 from ..service_context import ServiceContext
 from ..conversation_state_manager import reserve_interval_event
+from ..profiler_session import (
+    PROFILER_FORMAL_ROUNDS,
+    apply_hidden_round_protocol,
+    formal_round_for_turn,
+    is_profiler_character,
+)
 
 # Import necessary types from agent outputs
 from ..agent.output_types import SentenceOutput, AudioOutput, DisplayText, Actions
@@ -60,8 +66,8 @@ CONTEXT_INJECTION_KEYS = (
 
 
 def _is_time_request(input_text: str) -> bool:
-    normalized = input_text.strip().casefold().rstrip("。.!！?？").strip()
-    return normalized in TIME_REQUEST_COMMANDS
+    normalized = input_text.casefold()
+    return any(command in normalized for command in TIME_REQUEST_COMMANDS)
 
 
 ENGLISH_REPLY_SUFFIX = "此次回复语言为：英文"
@@ -196,6 +202,7 @@ async def process_single_conversation(
     # Create TTSTaskManager for this conversation
     tts_manager = TTSTaskManager()
     full_response = ""  # Initialize full_response here
+    model_context_response = ""
 
     try:
         # Send initial signals
@@ -216,8 +223,11 @@ async def process_single_conversation(
         optional_feature_context = request_metadata.pop(
             "optional_feature_context", ""
         )
+        analysis_data = request_metadata.pop("analysis_data", None)
         history_display_text = request_metadata.pop("history_display_text", "")
-        is_quick_start = bool(request_metadata.pop("quick_start", False))
+        skip_english_suffix = bool(
+            request_metadata.pop("skip_english_suffix", False)
+        )
         is_first_turn = False
         completed_context_turns = 0
         if context.history_uid and not skip_history:
@@ -236,6 +246,18 @@ async def process_single_conversation(
             )
 
         next_turn_number = completed_context_turns + 1
+        profiler_round = -1
+        if is_profiler_character(context.character_config.conf_uid):
+            previous_messages = (
+                get_history(
+                    context.character_config.conf_uid,
+                    context.history_uid,
+                    context.history_root,
+                )
+                if context.history_uid
+                else []
+            )
+            profiler_round = formal_round_for_turn(previous_messages, input_text)
         relationship_injection_interval = context.max_history_turns + 1
         should_inject_relationships = False
         if (
@@ -252,24 +274,16 @@ async def process_single_conversation(
                 history_root=context.history_root,
             )
 
-        if is_first_turn:
-            activity_lines = [prompt_builder.load_runtime_prompt("new_chat_created")]
-            if browser_time:
-                activity_lines.append(
-                    prompt_builder.load_runtime_prompt(
-                        "new_chat_browser_time",
-                        browser_time=browser_time,
-                    )
-                )
-            request_metadata["frontend_activity_context"] = (
-                prompt_builder.join_prompt_lines(activity_lines)
+        browser_time_suffix = ""
+        if browser_time and (is_first_turn or _is_time_request(input_text)):
+            browser_time_suffix = prompt_builder.load_runtime_prompt(
+                "browser_time_suffix",
+                browser_time=browser_time,
             )
-        elif browser_time and _is_time_request(input_text):
+
+        if is_first_turn:
             request_metadata["frontend_activity_context"] = (
-                prompt_builder.load_runtime_prompt(
-                    "requested_browser_time",
-                    browser_time=browser_time,
-                )
+                prompt_builder.load_runtime_prompt("new_chat_created")
             )
 
         if optional_feature_context:
@@ -278,6 +292,31 @@ async def process_single_conversation(
                     (
                         request_metadata.get("frontend_activity_context", ""),
                         optional_feature_context,
+                    )
+                )
+            )
+
+        if profiler_round >= 0:
+            profiler_context = (
+                prompt_builder.load_runtime_prompt("profiler_opening_context")
+                if profiler_round == 0
+                else prompt_builder.load_runtime_prompt(
+                    "profiler_round_context",
+                    round_number=profiler_round,
+                    final_instruction=(
+                        prompt_builder.load_runtime_prompt(
+                            "profiler_final_round_instruction"
+                        )
+                        if profiler_round == PROFILER_FORMAL_ROUNDS
+                        else ""
+                    ),
+                )
+            )
+            request_metadata["frontend_activity_context"] = (
+                prompt_builder.join_prompt_sections(
+                    (
+                        request_metadata.get("frontend_activity_context", ""),
+                        profiler_context,
                     )
                 )
             )
@@ -342,7 +381,7 @@ async def process_single_conversation(
         prompt_text = input_text
         if (
             input_text.strip()
-            and not is_quick_start
+            and not skip_english_suffix
             and ENGLISH_REPLY_SUFFIX not in input_text
             and (
                 context.english_mode
@@ -350,6 +389,10 @@ async def process_single_conversation(
             )
         ):
             prompt_text = f"{input_text}\n{ENGLISH_REPLY_SUFFIX}"
+        if browser_time_suffix:
+            prompt_text = prompt_builder.join_prompt_lines(
+                (prompt_text, browser_time_suffix)
+            )
 
         # Create batch input
         batch_input = create_batch_input(
@@ -361,6 +404,18 @@ async def process_single_conversation(
 
         # Store user message (check if we should skip storing to history)
         if context.history_uid and not skip_history:
+            history_model_content = input_text
+            if browser_time_suffix:
+                history_model_content = prompt_builder.join_prompt_lines(
+                    (history_model_content, browser_time_suffix)
+                )
+            visible_history_content = (
+                history_display_text
+                if isinstance(history_display_text, str) and history_display_text
+                else input_text
+                if history_model_content != input_text
+                else None
+            )
             context_injections = {
                 key: request_metadata[key]
                 for key in CONTEXT_INJECTION_KEYS
@@ -373,14 +428,13 @@ async def process_single_conversation(
                 conf_uid=context.character_config.conf_uid,
                 history_uid=context.history_uid,
                 role="human",
-                content=input_text,
+                content=history_model_content,
                 name=context.character_config.human_name,
-                display_content=(
-                    history_display_text
-                    if isinstance(history_display_text, str) and history_display_text
-                    else None
-                ),
+                display_content=visible_history_content,
                 context_injections=context_injections,
+                analysis_data=(
+                    analysis_data if isinstance(analysis_data, dict) else None
+                ),
                 debug_mode=is_debug_turn,
                 history_root=context.history_root,
             )
@@ -422,24 +476,74 @@ async def process_single_conversation(
                     )
                     logger.debug(f"Unexpected item content: {output_item}")
 
-            # Merge all accumulated outputs and process as one
+            # CS sessions keep the agent's sentence boundaries as separate TTS
+            # payloads so the removable camera feature can align reactions with
+            # what the user actually heard. Standard accounts preserve merged TTS.
             if accumulated_outputs:
-                merged_output = _merge_sentence_outputs(
-                    accumulated_outputs,
-                    character_name=context.character_config.character_name,
-                    avatar=context.character_config.avatar,
-                )
-                response_part = await process_agent_output(
-                    output=merged_output,
-                    character_config=context.character_config,
-                    live2d_model=context.live2d_model,
-                    tts_engine=context.tts_engine,
-                    websocket_send=websocket_send,
-                    tts_manager=tts_manager,
-                    translate_engine=None,
-                    generate_audio=context.generate_audio,
-                )
-                full_response = str(response_part) if response_part else ""
+                if context.isolated_conversation_context:
+                    if profiler_round >= 0:
+                        last_sentence = next(
+                            (
+                                item
+                                for item in reversed(accumulated_outputs)
+                                if isinstance(item, SentenceOutput)
+                            ),
+                            None,
+                        )
+                        if last_sentence is not None:
+                            last_sentence.display_text.text = (
+                                apply_hidden_round_protocol(
+                                    last_sentence.display_text.text,
+                                    profiler_round,
+                                )
+                            )
+                            last_sentence.tts_text = apply_hidden_round_protocol(
+                                last_sentence.tts_text,
+                                profiler_round,
+                            )
+
+                    model_context_response = "".join(
+                        item.display_text.text
+                        if isinstance(item, SentenceOutput)
+                        else item.transcript
+                        for item in accumulated_outputs
+                    )
+                    if profiler_round >= 0:
+                        model_context_response = apply_hidden_round_protocol(
+                            model_context_response,
+                            profiler_round,
+                        )
+                    for output in accumulated_outputs:
+                        response_part = await process_agent_output(
+                            output=output,
+                            character_config=context.character_config,
+                            live2d_model=context.live2d_model,
+                            tts_engine=context.tts_engine,
+                            websocket_send=websocket_send,
+                            tts_manager=tts_manager,
+                            translate_engine=None,
+                            generate_audio=context.generate_audio,
+                        )
+                        if response_part:
+                            full_response += str(response_part)
+                else:
+                    merged_output = _merge_sentence_outputs(
+                        accumulated_outputs,
+                        character_name=context.character_config.character_name,
+                        avatar=context.character_config.avatar,
+                    )
+                    model_context_response = merged_output.display_text.text
+                    response_part = await process_agent_output(
+                        output=merged_output,
+                        character_config=context.character_config,
+                        live2d_model=context.live2d_model,
+                        tts_engine=context.tts_engine,
+                        websocket_send=websocket_send,
+                        tts_manager=tts_manager,
+                        translate_engine=None,
+                        generate_audio=context.generate_audio,
+                    )
+                    full_response = str(response_part) if response_part else ""
 
         except Exception as e:
             logger.exception(
@@ -466,9 +570,15 @@ async def process_single_conversation(
                 conf_uid=context.character_config.conf_uid,
                 history_uid=context.history_uid,
                 role="ai",
-                content=full_response,
+                content=model_context_response or full_response,
                 name=context.character_config.character_name,
                 avatar=context.character_config.avatar,
+                display_content=(
+                    full_response
+                    if model_context_response
+                    and model_context_response != full_response
+                    else None
+                ),
                 debug_mode=is_debug_turn,
                 history_root=context.history_root,
             )
@@ -478,6 +588,17 @@ async def process_single_conversation(
                     context.history_uid,
                     next_turn_number,
                     context.history_root,
+                )
+
+            if profiler_round == PROFILER_FORMAL_ROUNDS:
+                await websocket_send(
+                    json.dumps(
+                        {
+                            "type": "profiler-final-round-ready",
+                            "round": PROFILER_FORMAL_ROUNDS,
+                        },
+                        ensure_ascii=False,
+                    )
                 )
 
             summary_conf_uid = context.character_config.conf_uid
@@ -539,11 +660,27 @@ async def process_single_conversation(
                             ("long_term_memory",)
                         )
                     ):
+                        character_system_prompt = (
+                            context.get_editable_system_prompt()
+                        )
+
+                        async def summarize_with_character_prompt(
+                            turns,
+                            callback=summarize,
+                            prompt=character_system_prompt,
+                            current_browser_time=browser_time,
+                        ):
+                            return await callback(
+                                turns,
+                                prompt,
+                                current_browser_time,
+                            )
+
                         context.summary_coordinator.enqueue(
                             "long_term_memory",
                             lambda conf_uid=summary_conf_uid,
                             history_uid=summary_history_uid,
-                            callback=summarize,
+                            callback=summarize_with_character_prompt,
                             reconcile_callback=reconcile_memory: (
                                 context.long_term_memory_manager.summarize_pending_turns(
                                     conf_uid=conf_uid,

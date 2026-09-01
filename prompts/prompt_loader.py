@@ -68,7 +68,7 @@ def render_prompt(key: str, **values: object) -> str:
 
 
 def load_persona(persona_name: str) -> str:
-    """Load the full character system prompt template from YAML."""
+    """Load a character persona template from YAML."""
     return load_prompt(f"chat.characters.{persona_name}.system_prompt")
 
 

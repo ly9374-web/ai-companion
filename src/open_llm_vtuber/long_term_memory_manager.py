@@ -902,6 +902,60 @@ class LongTermMemoryManager:
 
             return len(pending_turns) >= self.summary_interval
 
+    async def replace_pending_turns(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        turns: list[dict[str, str]],
+    ) -> bool:
+        """Replace cancelled summary input with an authoritative turn snapshot."""
+        normalized = [
+            {
+                "user": self._normalize_text(turn.get("user", "")),
+                "assistant": self._normalize_text(turn.get("assistant", "")),
+            }
+            for turn in turns
+            if self._normalize_text(turn.get("user", ""))
+            and self._normalize_text(turn.get("assistant", ""))
+        ]
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            state["pending_turns"] = normalized
+            state.pop("active_batch", None)
+            return self._save_state(conf_uid, history_uid, state)
+
+    async def discard_pending_turn(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        turn: dict[str, str],
+    ) -> bool:
+        """Remove one withdrawn completed turn that has not been summarized yet."""
+        target = {
+            "user": self._normalize_text(turn.get("user", "")),
+            "assistant": self._normalize_text(turn.get("assistant", "")),
+        }
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            pending_turns = state.get("pending_turns", [])
+            if not isinstance(pending_turns, list):
+                return False
+            for index in range(len(pending_turns) - 1, -1, -1):
+                candidate = pending_turns[index]
+                if not isinstance(candidate, dict):
+                    continue
+                if {
+                    "user": self._normalize_text(candidate.get("user", "")),
+                    "assistant": self._normalize_text(
+                        candidate.get("assistant", "")
+                    ),
+                } == target:
+                    pending_turns.pop(index)
+                    state["pending_turns"] = pending_turns
+                    state.pop("active_batch", None)
+                    return self._save_state(conf_uid, history_uid, state)
+        return False
+
     async def summarize_pending_turns(
         self,
         conf_uid: str,

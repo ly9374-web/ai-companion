@@ -82,16 +82,19 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertLess(request.index("长期关系背景"), request.index("短期关系背景"))
         self.assertIn("[本轮用户输入]\n你好", request)
 
-    def test_all_summary_user_prompts_are_yaml_driven_valid_json(self):
-        memory_payload = json.loads(
-            prompt_builder.build_long_term_memory_summary_input(
-                [{"记忆命名": "偏好", "记忆内容": "喜欢咖啡"}],
-                [{"user": "用户说话", "assistant": "角色回答"}],
-            )
+    def test_summary_user_prompts_are_yaml_driven(self):
+        memory_request = prompt_builder.build_long_term_memory_summary_input(
+            [{"user": "用户说话", "assistant": "角色回答"}],
+            character_system_prompt="账户编辑后的人物设定",
         )
+        memory_prefix = "<人物设定>账户编辑后的人物设定</人物设定>\n"
+        self.assertTrue(memory_request.startswith(memory_prefix))
+        memory_payload = json.loads(memory_request.removeprefix(memory_prefix))
         long_payload = json.loads(
             prompt_builder.build_long_term_relationship_summary_input(
-                "长期记忆原文", "长期关系原文"
+                ["长期记忆原文"],
+                "长期关系原文",
+                "短期关系原文",
             )
         )
         short_payload = json.loads(
@@ -102,9 +105,9 @@ class PromptBuilderTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(memory_payload["最近三轮对话"][0]["user"], "用户说话")
+        self.assertEqual(memory_payload["最近6轮对话"][0]["user"], "用户说话")
         self.assertEqual(
-            long_payload["long_term_memory.md全部内容"], "长期记忆原文"
+            long_payload["long_term_memory.md内容"], ["长期记忆原文"]
         )
         self.assertEqual(
             short_payload["现有short_term_relationship.md全部内容"],

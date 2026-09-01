@@ -1,16 +1,15 @@
 import { useCallback } from "react";
 import { useWebSocket } from "@/context/websocket-context";
-import { useMediaCapture } from "@/hooks/utils/use-media-capture";
 import { formatBrowserTime } from "@/utils/browser-time";
 import { getMissingChatApiKeyProvider } from "@/constants/api-keys";
 import { toaster } from "@/components/ui/toaster";
 import { useTranslation } from "react-i18next";
-import { optionalFeature } from "@optional-feature";
+import { optionalFeature, useOptionalMediaCapture } from "@optional-feature";
 
 export function useSendAudio() {
   const { t } = useTranslation();
   const { sendMessage } = useWebSocket();
-  const { captureAllMedia } = useMediaCapture();
+  const { captureAllMedia } = useOptionalMediaCapture();
 
   const sendAudioPartition = useCallback(
     async (audio: Float32Array) => {

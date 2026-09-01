@@ -19,6 +19,7 @@ from pathlib import Path
 from loguru import logger
 
 from .config_manager.utils import read_yaml
+from .optional_features import get_optional_registration_features
 
 
 CHAT_HISTORY_ROOT = Path("chat_history")
@@ -33,11 +34,6 @@ _LAYOUT_MARKER_NAME = ".account-layout-v2.json"
 _MIGRATION_CONFLICT_DIR = ".migration-conflicts"
 _PASSWORD_ITERATIONS = 210_000
 _MAX_PERSISTENT_SESSIONS = 10
-_CONVERSATION_STARTERS_FEATURE = "conversation_starters_v1"
-_LIYA_CHARACTER_UID = "generated_16ae7cf0a52e4212a8da18ac89cd4ab6"
-_STANDARD_ACCOUNT_ONLY_CHARACTER_UIDS = frozenset(
-    {_LIYA_CHARACTER_UID}
-)
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -142,29 +138,6 @@ def account_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
-def is_cs_account(account_name: object) -> bool:
-    """Return whether an account uses the special ``cs`` account mode."""
-    try:
-        normalized = normalize_account_name(account_name)
-    except InvalidAccountName:
-        return False
-    return account_key(normalized).endswith("cs")
-
-
-def isolates_conversation_context(account_name: object) -> bool:
-    """Return whether an account must use only its active conversation context."""
-    return is_cs_account(account_name)
-
-
-def account_can_access_character(account_name: object, conf_uid: object) -> bool:
-    """Return whether an account may discover and select a character."""
-    if not is_cs_account(account_name):
-        return True
-    if not isinstance(conf_uid, str):
-        return True
-    return account_key(conf_uid) not in _STANDARD_ACCOUNT_ONLY_CHARACTER_UIDS
-
-
 def get_account_history_root(account_name: str) -> Path:
     """Return the validated directory for one canonical account name."""
     return CHAT_HISTORY_ROOT / normalize_account_name(account_name)
@@ -229,18 +202,21 @@ def _write_account_marker(account_name: str, payload: dict[str, object]) -> None
     _write_json(marker_path, payload)
 
 
-def has_conversation_starters(account_name: str) -> bool:
-    """Return the persisted opt-in assigned only during eligible registration."""
+def get_persisted_account_features(account_name: str) -> dict[str, bool]:
+    """Return validated feature metadata without assigning runtime behavior."""
     account = resolve_account_name(account_name)
     if account is None:
-        return False
+        return {}
     with _ACCOUNT_LOCK:
         marker = _read_account_marker(account)
         features = marker.get("features")
-        return bool(
-            isinstance(features, dict)
-            and features.get(_CONVERSATION_STARTERS_FEATURE) is True
-        )
+        if not isinstance(features, dict):
+            return {}
+        return {
+            str(key): value
+            for key, value in features.items()
+            if isinstance(key, str) and isinstance(value, bool)
+        }
 
 
 def ensure_character_profile(account_name: str, conf_uid: str) -> Path:
@@ -487,9 +463,7 @@ def register_account(account_name: object, password: object) -> str:
                     "account": requested,
                     "password": _password_record(validated_password),
                     "sessions": [],
-                    "features": {
-                        _CONVERSATION_STARTERS_FEATURE: requested_key.endswith("cs")
-                    },
+                    "features": get_optional_registration_features(requested),
                 }
             )
             _write_account_marker(requested, marker)

@@ -8,6 +8,9 @@ from typing import Any, Iterable
 from . import prompt_loader
 
 
+_CHARACTER_OUTPUT_RULES_MARKER = "#声音效果与表情"
+
+
 def load_system_prompt(name: str) -> str:
     return prompt_loader.load_prompt(f"system.{name}").strip()
 
@@ -20,7 +23,7 @@ def resolve_persona_prompt(
     persona_prompt_file: str | None,
     inline_persona_prompt: str,
 ) -> str:
-    """Load a complete character system template or legacy inline content."""
+    """Load a character persona template or legacy inline content."""
     if persona_prompt_file:
         return prompt_loader.load_persona(persona_prompt_file).strip()
     return inline_persona_prompt.strip()
@@ -30,10 +33,20 @@ def render_character_system_prompt(
     system_prompt_template: str,
     emomap_keys: str,
 ) -> str:
-    return prompt_loader.render_text(
-        system_prompt_template,
+    # Older persona templates may contain their own copy of these rules. Drop
+    # that legacy suffix before appending the canonical YAML-managed version.
+    persona_template = system_prompt_template.partition(
+        _CHARACTER_OUTPUT_RULES_MARKER
+    )[0]
+    persona_prompt = prompt_loader.render_text(
+        persona_template,
         emomap_keys=emomap_keys,
     ).strip()
+    output_rules = prompt_loader.render_prompt(
+        "chat.character_output_rules",
+        emomap_keys=emomap_keys,
+    ).strip()
+    return join_prompt_sections((persona_prompt, output_rules))
 
 
 def load_runtime_prompt(name: str, **values: object) -> str:
@@ -130,9 +143,24 @@ def build_rolling_summary_injection(summary: str) -> str:
 
 def build_long_term_memory_summary_input(
     recent_turns: list[dict[str, str]],
+    character_system_prompt: str = "",
+    browser_time: str = "",
 ) -> str:
+    browser_date = browser_time.partition("，")[0].strip()
+    browser_date_context = (
+        load_runtime_prompt(
+            "long_term_memory_browser_date",
+            browser_date=browser_date,
+        )
+        if browser_date
+        else ""
+    )
     return prompt_loader.render_prompt(
         "summaries.long_term_memory.user_prompt",
+        character_system_prompt=character_system_prompt.strip(),
+        browser_date_context_json=json.dumps(
+            browser_date_context, ensure_ascii=False
+        ),
         recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
     ).strip()
 
@@ -203,6 +231,66 @@ def build_short_term_relationship_summary_input(
         ),
         existing_short_term_relationship_file_json=json.dumps(
             existing_short_term_relationship_file, ensure_ascii=False
+        ),
+    ).strip()
+
+
+def build_persona_profile_chunk_input(
+    target_name: str,
+    character_name: str,
+    chunk: str,
+    chunk_index: int,
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.persona_profile_shared.chunk_user_prompt",
+        target_name=target_name,
+        character_name=character_name,
+        chunk_index=f"{chunk_index:03d}",
+        chunk_json=json.dumps(chunk, ensure_ascii=False),
+    ).strip()
+
+
+def build_persona_profile_consolidation_input(
+    target_name: str,
+    document_type: str,
+    document: str,
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.persona_profile_consolidate.user_prompt",
+        target_name=target_name,
+        document_type=document_type,
+        document_json=json.dumps(document, ensure_ascii=False),
+    ).strip()
+
+
+def build_persona_profile_final_input(
+    target_name: str,
+    character_name: str,
+    relationship: str,
+    memory: str,
+    single_chunk_source: str = "",
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.persona_profile_shared.final_user_prompt",
+        target_name=target_name,
+        character_name=character_name,
+        relationship_json=json.dumps(relationship, ensure_ascii=False),
+        memory_json=json.dumps(memory, ensure_ascii=False),
+        single_chunk_source_json=json.dumps(
+            single_chunk_source, ensure_ascii=False
+        ),
+    ).strip()
+
+
+def build_profiler_thinslice_input(
+    target_name: str,
+    analysis_payload: dict[str, Any],
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.profiler_thinslice.user_prompt",
+        target_name=target_name,
+        analysis_payload_json=json.dumps(
+            analysis_payload, ensure_ascii=False, indent=2
         ),
     ).strip()
 

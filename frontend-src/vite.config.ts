@@ -4,13 +4,35 @@ import react from '@vitejs/plugin-react-swc';
 import fs from 'fs';
 
 const projectRoot = path.resolve(__dirname, '..');
-const optionalFeatureSource = fs.readdirSync(projectRoot, { withFileTypes: true })
+const optionalFeatureSources = fs.readdirSync(projectRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => path.join(projectRoot, entry.name))
-  .find((directory) => (
-    fs.existsSync(path.join(directory, 'optional-feature.json'))
-    && fs.existsSync(path.join(directory, 'frontend-src', 'index.tsx'))
-  ));
+  .filter((directory) => fs.existsSync(path.join(directory, 'optional-feature.json')));
+if (optionalFeatureSources.length > 1) {
+  throw new Error(`Expected at most one optional feature, found: ${optionalFeatureSources.join(', ')}`);
+}
+const optionalFeatureSource = optionalFeatureSources[0];
+let optionalFeatureFrontendEntry: string | undefined;
+if (optionalFeatureSource) {
+  const descriptorPath = path.join(optionalFeatureSource, 'optional-feature.json');
+  let descriptor: Record<string, unknown>;
+  try {
+    descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Cannot read optional feature descriptor: ${descriptorPath}`, { cause: error });
+  }
+  if (typeof descriptor.id !== 'string' || !descriptor.id.trim()) {
+    throw new Error(`Optional feature id is missing: ${descriptorPath}`);
+  }
+  if (typeof descriptor.frontend_source_entry !== 'string' || !descriptor.frontend_source_entry.trim()) {
+    throw new Error(`Optional feature frontend_source_entry is missing: ${descriptorPath}`);
+  }
+  const candidate = path.resolve(optionalFeatureSource, descriptor.frontend_source_entry);
+  if (!candidate.startsWith(`${path.resolve(optionalFeatureSource)}${path.sep}`) || !fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`Optional feature frontend source entry is missing: ${candidate}`);
+  }
+  optionalFeatureFrontendEntry = candidate;
+}
 
 const createConfig = async (outDir: string) => ({
   plugins: [
@@ -58,8 +80,8 @@ const createConfig = async (outDir: string) => ({
       ),
       "@motionsync": path.resolve(__dirname, "./src/renderer/MotionSync/src"),
       "/src": path.resolve(__dirname, "./src/renderer/src"),
-      "@optional-feature": optionalFeatureSource
-        ? path.join(optionalFeatureSource, 'frontend-src', 'index.tsx')
+      "@optional-feature": optionalFeatureFrontendEntry
+        ? optionalFeatureFrontendEntry
         : path.resolve(__dirname, './src/renderer/src/optional-feature-stub.tsx'),
     },
   },

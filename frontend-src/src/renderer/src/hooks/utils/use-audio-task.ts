@@ -12,6 +12,7 @@ import { toaster } from '@/components/ui/toaster';
 import { useWebSocket } from '@/context/websocket-context';
 import { DisplayText } from '@/services/websocket-service';
 import { optionalExpressionFeature } from '@/services/optional-expression-feature';
+import { optionalFeature } from '@optional-feature';
 import { useLive2DExpression } from '@/hooks/canvas/use-live2d-expression';
 import * as LAppDefine from '../../../WebSDK/src/lappdefine';
 
@@ -151,8 +152,22 @@ export const useAudioTask = () => {
         // Register with global audio manager IMMEDIATELY after creating audio
         audioManager.setCurrentAudio(audio, model);
         let isFinished = false;
+        let playbackStarted = false;
 
-        const cleanup = () => {
+        const cleanup = (reason: 'ended' | 'interrupted' | 'error') => {
+          if (playbackStarted) {
+            const duration = Number(audio.duration);
+            const currentTime = Number(audio.currentTime);
+            const playbackRatio = Number.isFinite(duration) && duration > 0
+              ? Math.max(0, Math.min(1, currentTime / duration))
+              : reason === 'ended' ? 1 : 0;
+            optionalFeature.onAssistantAudioEnd({
+              text: displayText?.text || '',
+              interrupted: reason === 'interrupted',
+              playbackRatio,
+            });
+            playbackStarted = false;
+          }
           audioManager.clearCurrentAudio(audio);
           if (!isFinished) {
             isFinished = true;
@@ -167,14 +182,14 @@ export const useAudioTask = () => {
           // Check for interruption before playback
           if (stateRef.current.aiState === 'interrupted' || !audioManager.hasCurrentAudio()) {
             console.warn('Audio playback cancelled due to interruption or audio was stopped');
-            cleanup();
+            cleanup('interrupted');
             return;
           }
 
           console.log('Starting audio playback with lip sync');
           audio.play().catch((err) => {
             console.error("Audio play error:", err);
-            cleanup();
+            cleanup('error');
           });
 
           // Setup lip sync
@@ -200,14 +215,24 @@ export const useAudioTask = () => {
           }
         });
 
+        audio.addEventListener('playing', () => {
+          if (playbackStarted) return;
+          playbackStarted = true;
+          optionalFeature.onAssistantAudioStart({ text: displayText?.text || '' });
+        });
+
         audio.addEventListener('ended', () => {
           console.log("Audio playback completed");
-          cleanup();
+          cleanup('ended');
+        });
+
+        audio.addEventListener('pause', () => {
+          if (!isFinished && !audio.ended) cleanup('interrupted');
         });
 
         audio.addEventListener('error', (error) => {
           console.error("Audio playback error:", error);
-          cleanup();
+          cleanup('error');
         });
 
         audio.load();

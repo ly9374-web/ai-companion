@@ -7,10 +7,18 @@ import numpy as np
 from fastapi import WebSocket
 from loguru import logger
 
-from ..chat_history_manager import store_message
+from ..chat_history_manager import get_history, store_message
 from ..service_context import ServiceContext
-from ..optional_features import build_optional_request_context
-from ..conversation_starters import get_conversation_starter
+from ..optional_features import (
+    build_optional_request_context,
+    collect_optional_analysis_data,
+    process_optional_text_input,
+)
+from ..profiler_session import (
+    PROFILER_FORMAL_ROUNDS,
+    completed_profiler_rounds,
+    is_profiler_character,
+)
 from .single_conversation import process_single_conversation
 from .conversation_utils import EMOJI_LIST
 from prompts import prompt_builder, prompt_loader
@@ -69,27 +77,39 @@ async def handle_conversation_trigger(
             )
         )
     elif msg_type == "text-input":
-        quick_start_topic = data.get("quick_start_topic")
-        if quick_start_topic is not None:
-            if not context.conversation_starters_enabled:
-                raise ValueError("Conversation starters are not enabled for this account")
-            starter = get_conversation_starter(quick_start_topic)
-            if starter is None:
-                raise ValueError("Unsupported conversation starter")
-            user_input = starter["prompt"]
-            metadata = {"history_display_text": starter["label"]}
-            # Selecting the English starter puts the session into English mode:
-            # every later user prompt is steered to expect an English reply.
-            # Any other starter leaves the mode off.
-            context.english_mode = quick_start_topic == "english"
-            metadata["quick_start"] = True
-        else:
+        optional_input = process_optional_text_input(data, context)
+        if optional_input is None:
             user_input = data.get("text", "")
+        else:
+            user_input = optional_input.get("user_input", "")
+            optional_metadata = optional_input.get("metadata")
+            metadata = optional_metadata if isinstance(optional_metadata, dict) else None
+            english_mode = optional_input.get("english_mode")
+            if isinstance(english_mode, bool):
+                context.english_mode = english_mode
     else:  # mic-audio-end
         user_input = received_data_buffers[client_uid]
         received_data_buffers[client_uid] = np.array([])
 
     if msg_type != "ai-speak-signal":
+        if is_profiler_character(context.character_config.conf_uid) and context.history_uid:
+            history = get_history(
+                context.character_config.conf_uid,
+                context.history_uid,
+                context.history_root,
+            )
+            if completed_profiler_rounds(history) >= PROFILER_FORMAL_ROUNDS:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "本次12轮侧写已经完成，请查看生成的侧写报告或新建会话。",
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return
+
         browser_time = data.get("browser_time", "")
         if isinstance(browser_time, str) and BROWSER_TIME_PATTERN.fullmatch(
             browser_time
@@ -100,8 +120,18 @@ async def handle_conversation_trigger(
             metadata = dict(metadata or {}) or None
             logger.warning("Missing or invalid browser time for {}", msg_type)
 
+        optional_contexts = data.get("optional_contexts")
+        analysis_data = collect_optional_analysis_data(
+            optional_contexts,
+            context,
+        )
+        if analysis_data:
+            metadata = dict(metadata or {})
+            metadata["analysis_data"] = analysis_data
+
         optional_feature_context = build_optional_request_context(
-            data.get("optional_contexts")
+            optional_contexts,
+            context,
         )
         if optional_feature_context:
             metadata = dict(metadata or {})

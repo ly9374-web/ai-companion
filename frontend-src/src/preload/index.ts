@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 import electron from 'electron';
-const { contextBridge, ipcRenderer, desktopCapturer } = electron;
+const { contextBridge, ipcRenderer } = electron;
 import { electronAPI } from '@electron-toolkit/preload';
 import { ConfigFile } from '../main/menu-manager';
 
@@ -72,9 +72,6 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', {
       ...electronAPI,
-      desktopCapturer: {
-        getSources: (options) => desktopCapturer.getSources(options),
-      },
       ipcRenderer: {
         invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
         on: (channel, func) => ipcRenderer.on(channel, func),

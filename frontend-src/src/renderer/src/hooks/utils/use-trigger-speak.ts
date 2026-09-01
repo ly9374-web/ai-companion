@@ -1,11 +1,10 @@
 import { useCallback } from 'react';
 import { useWebSocket } from '@/context/websocket-context';
-import { useMediaCapture } from './use-media-capture';
-import { optionalFeature } from '@optional-feature';
+import { optionalFeature, useOptionalMediaCapture } from '@optional-feature';
 
 export function useTriggerSpeak() {
   const { sendMessage, wsState } = useWebSocket();
-  const { captureAllMedia } = useMediaCapture();
+  const { captureAllMedia } = useOptionalMediaCapture();
 
   const sendTriggerSignal = useCallback(
     async (actualIdleTime: number) => {

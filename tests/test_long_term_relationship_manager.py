@@ -282,7 +282,7 @@ class SummaryModelRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         memory_result = await agent.summarize_long_term_memory(
             [{"user": "你好", "assistant": "你好呀"}],
-            [LongTermMemory("称呼偏好", "用户喜欢被叫小明。")],
+            "测试角色人物设定",
         )
         relationship_result = await agent.summarize_long_term_relationship(
             "长期记忆文件完整内容",
@@ -295,6 +295,10 @@ class SummaryModelRoutingTests(unittest.IsolatedAsyncioTestCase):
             '{"long_term_relationship":"关系尚在建立中。"}',
         )
         self.assertEqual(len(summary_llm.calls), 2)
+        self.assertIn(
+            "<人物设定>测试角色人物设定</人物设定>",
+            summary_llm.calls[0][0][0]["content"],
+        )
         relationship_payload = json.loads(summary_llm.calls[1][0][0]["content"])
         self.assertEqual(
             relationship_payload["long_term_memory.md全部内容"],

@@ -24,6 +24,8 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 ENV_FILE = BASE_DIR / ".env"
 LOGGER = logging.getLogger("emotion-camera")
+TOKEN_REFRESH_ATTEMPTS = 4
+TOKEN_REFRESH_RETRY_BASE_SECONDS = 0.5
 
 
 def load_local_env(path: Path = ENV_FILE) -> None:
@@ -89,15 +91,36 @@ class CloudTokenCache:
             return await self._refresh()
 
     async def _refresh(self) -> str:
+        payload: dict[str, Any] | None = None
         async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
-            response = await client.post(
-                f"{cloud_http_base()}/auth/token",
-                data={"ak": required_env("AIE_AK"), "sk": required_env("AIE_SK")},
-                headers={"Accept": "application/json"},
-            )
-            response.raise_for_status()
-            payload = response.json()
+            for attempt in range(TOKEN_REFRESH_ATTEMPTS):
+                try:
+                    response = await client.post(
+                        f"{cloud_http_base()}/auth/token",
+                        data={"ak": required_env("AIE_AK"), "sk": required_env("AIE_SK")},
+                        headers={"Accept": "application/json"},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    break
+                except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    retryable = not isinstance(exc, httpx.HTTPStatusError) or (
+                        exc.response.status_code == 429 or exc.response.status_code >= 500
+                    )
+                    if not retryable or attempt + 1 >= TOKEN_REFRESH_ATTEMPTS:
+                        raise
+                    delay = TOKEN_REFRESH_RETRY_BASE_SECONDS * (2**attempt)
+                    LOGGER.warning(
+                        "AIe token refresh failed temporarily (attempt %s/%s); retrying in %.1fs: %s",
+                        attempt + 1,
+                        TOKEN_REFRESH_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
 
+        if payload is None:
+            raise RuntimeError("AIe token refresh returned no response")
         if payload.get("code") != 200 or not payload.get("token"):
             message = payload.get("detail") or payload.get("msg") or "AK/SK 验证失败"
             raise RuntimeError(str(message))

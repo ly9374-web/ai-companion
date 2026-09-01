@@ -4,17 +4,14 @@ import { useAiState } from '@/context/ai-state-context';
 import { useInterrupt } from '@/components/canvas/live2d';
 import { useChatHistory } from '@/context/chat-history-context';
 import { useVAD } from '@/context/vad-context';
-import { useMediaCapture } from '@/hooks/utils/use-media-capture';
 import { formatBrowserTime } from '@/utils/browser-time';
-import { optionalFeature } from '@optional-feature';
+import { optionalFeature, useOptionalMediaCapture } from '@optional-feature';
 import { getMissingChatApiKeyProvider } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
 
-export type QuickStartTopic = 'english' | 'work' | 'relationships' | 'school' | 'psychology' | 'story';
-
 interface SendTextMessageOptions {
-  quickStartTopic?: QuickStartTopic;
+  optionalPayload?: Record<string, unknown>;
 }
 
 export function useSendTextMessage() {
@@ -24,7 +21,7 @@ export function useSendTextMessage() {
   const { interrupt } = useInterrupt();
   const { appendHumanMessage } = useChatHistory();
   const { stopMic, autoStopMic } = useVAD();
-  const { captureAllMedia } = useMediaCapture();
+  const { captureAllMedia } = useOptionalMediaCapture();
 
   const sendTextMessage = useCallback(async (
     displayText: string,
@@ -54,13 +51,11 @@ export function useSendTextMessage() {
 
     appendHumanMessage(text);
     wsContext.sendMessage({
+      ...(options.optionalPayload || {}),
       type: 'text-input',
       text,
       images,
       browser_time: formatBrowserTime(),
-      ...(options.quickStartTopic ? {
-        quick_start_topic: options.quickStartTopic,
-      } : {}),
       ...(optionalContexts ? {
         optional_contexts: optionalContexts,
       } : {}),

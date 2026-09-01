@@ -458,6 +458,38 @@ class LongTermRelationshipManager:
 
             return pending_turns >= self.update_interval
 
+    async def replace_pending_update_count(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        count: int,
+    ) -> bool:
+        """Replace a cancelled update checkpoint with the rebuilt turn count."""
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            state["pending_update_turns"] = max(0, count)
+            state.pop("pending_turns", None)
+            return self._save_state(conf_uid, history_uid, state)
+
+    async def discard_latest_pending_turn(
+        self,
+        conf_uid: str,
+        history_uid: str,
+    ) -> bool:
+        """Forget one withdrawn completed turn that is still awaiting update."""
+        async with self._get_history_lock(conf_uid, history_uid):
+            state = self._get_state(conf_uid, history_uid)
+            pending_turns = state.get("pending_update_turns", 0)
+            if (
+                isinstance(pending_turns, bool)
+                or not isinstance(pending_turns, int)
+                or pending_turns < 1
+            ):
+                return False
+            state["pending_update_turns"] = pending_turns - 1
+            state.pop("pending_turns", None)
+            return self._save_state(conf_uid, history_uid, state)
+
     async def summarize_pending_update(
         self,
         conf_uid: str,

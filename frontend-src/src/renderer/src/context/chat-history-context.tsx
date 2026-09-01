@@ -27,6 +27,8 @@ interface ChatHistoryState {
   appendResponse: (text: string) => void;
   clearResponse: () => void;
   setForceNewMessage: (value: boolean) => void;
+  undoPending: boolean;
+  setUndoPending: (value: boolean) => void;
 }
 
 /**
@@ -60,6 +62,7 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
   );
   const [fullResponse, setFullResponse] = useState(DEFAULT_HISTORY.fullResponse);
   const [forceNewMessage, setForceNewMessage] = useState<boolean>(false);
+  const [undoPending, setUndoPending] = useState<boolean>(false);
 
   /**
    * Append a human message to the chat history
@@ -217,6 +220,8 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
       appendResponse,
       clearResponse,
       setForceNewMessage,
+      undoPending,
+      setUndoPending,
     }),
     [
       messages,
@@ -230,6 +235,7 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
       appendResponse,
       clearResponse,
       setForceNewMessage,
+      undoPending,
     ],
   );
 

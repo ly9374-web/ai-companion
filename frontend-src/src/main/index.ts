@@ -1,8 +1,9 @@
 /* eslint-disable no-shadow */
-import { app, ipcMain, globalShortcut, desktopCapturer } from "electron";
+import { app, ipcMain, globalShortcut } from "electron";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
 import { WindowManager } from "./window-manager";
 import { MenuManager } from "./menu-manager";
+import { setupOptionalFeatureIpc } from "@optional-feature-main";
 
 let windowManager: WindowManager;
 let menuManager: MenuManager;
@@ -67,10 +68,7 @@ function setupIPC(): void {
     menuManager.updateConfigFiles(files);
   });
 
-  ipcMain.handle('get-screen-capture', async () => {
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    return sources[0].id;
-  });
+  setupOptionalFeatureIpc(ipcMain);
 }
 
 app.whenReady().then(() => {

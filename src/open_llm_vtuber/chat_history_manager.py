@@ -61,6 +61,8 @@ class HistoryMessage(TypedDict):
     display_content: Optional[str]
     # Hidden model-only context. The frontend must not display this field.
     context_injections: Optional[dict[str, str]]
+    # Analysis-only sensor observations. Never injected into the chat model or UI.
+    analysis_data: Optional[dict[str, object]]
     # Debug turns remain inspectable but never enter normal conversation context.
     debug_mode: Optional[bool]
 
@@ -219,6 +221,7 @@ def store_message(
     avatar: str | None = None,
     display_content: str | None = None,
     context_injections: dict[str, str] | None = None,
+    analysis_data: dict[str, object] | None = None,
     debug_mode: bool = False,
     history_root: str | Path = "chat_history",
 ):
@@ -233,6 +236,7 @@ def store_message(
         avatar: Optional avatar URL (default None)
         display_content: Optional shorter text returned to the frontend
         context_injections: Optional model-only context snapshots
+        analysis_data: Optional analysis-only sensor observations
         debug_mode: Whether this message belongs to a debug-only turn
     """
     if not conf_uid or not history_uid:
@@ -272,6 +276,8 @@ def store_message(
                 for key, value in context_injections.items()
                 if isinstance(value, str) and value.strip()
             }
+        if isinstance(analysis_data, dict) and analysis_data:
+            new_item["analysis_data"] = analysis_data
         if debug_mode:
             new_item["debug_mode"] = True
         history_data.append(new_item)
@@ -279,10 +285,78 @@ def store_message(
     logger.debug(f"Successfully stored {role} message")
 
 
+def undo_latest_chat_message(
+    conf_uid: str,
+    history_uid: str,
+    history_root: str | Path = "chat_history",
+) -> dict | None:
+    """Atomically remove the latest human/AI message from one history."""
+    if not conf_uid or not history_uid:
+        return None
+
+    filepath = _get_safe_history_path(conf_uid, history_uid, history_root)
+    try:
+        with _get_history_lock(history_root, conf_uid, history_uid):
+            if not os.path.exists(filepath):
+                return None
+            with open(filepath, "r", encoding="utf-8") as history_file:
+                history_data = json.load(history_file)
+
+            removed: dict | None = None
+            for index in range(len(history_data) - 1, -1, -1):
+                if history_data[index].get("role") in {"human", "ai"}:
+                    removed = history_data.pop(index)
+                    while (
+                        index < len(history_data)
+                        and history_data[index].get("role") == "system"
+                    ):
+                        history_data.pop(index)
+                    break
+            if removed is None:
+                return None
+
+            completed_turns = len(
+                extract_normal_turns(
+                    [
+                        message
+                        for message in history_data
+                        if message.get("role") != "metadata"
+                    ]
+                )
+            )
+            if history_data and history_data[0].get("role") == "metadata":
+                schedule = history_data[0].get("context_injection_schedule")
+                if isinstance(schedule, dict):
+                    schedule["completed_turns"] = completed_turns
+                    last_injection_turn = schedule.get(
+                        "last_relationship_injection_turn"
+                    )
+                    if (
+                        not isinstance(last_injection_turn, bool)
+                        and isinstance(last_injection_turn, int)
+                        and last_injection_turn > completed_turns
+                    ):
+                        schedule["last_relationship_injection_turn"] = (
+                            completed_turns or None
+                        )
+
+            _write_history_atomic(filepath, history_data)
+            logger.info(
+                "Undid latest {} message in history {}",
+                removed.get("role"),
+                history_uid,
+            )
+            return removed
+    except Exception as exc:
+        logger.error("Failed to undo latest message: {}", exc)
+        return None
+
+
 def render_history_message_for_frontend(message: dict) -> dict:
     """Remove model-only fields and apply an optional user-facing message label."""
     rendered = message.copy()
     rendered.pop("context_injections", None)
+    rendered.pop("analysis_data", None)
     rendered.pop("debug_mode", None)
     display_content = rendered.pop("display_content", None)
     if isinstance(display_content, str) and display_content:

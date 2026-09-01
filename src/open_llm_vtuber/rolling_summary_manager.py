@@ -219,5 +219,51 @@ class RollingSummaryManager:
             generated = True
         return generated
 
+    async def regenerate_recent_turns(
+        self,
+        conf_uid: str,
+        history_uid: str,
+        turns: list[dict[str, str]],
+        summarize: RollingSummaryCallback,
+    ) -> bool:
+        """Rebuild a cancelled rolling request from a post-undo snapshot."""
+        if not turns:
+            return False
+        async with self._get_history_lock(conf_uid, history_uid):
+            all_turns = self._turn_payloads(
+                get_history(conf_uid, history_uid, self.history_root)
+            )
+            summary: str | None = None
+            last_error: Exception | None = None
+            for _ in range(3):
+                try:
+                    summary = self.parse_summary(await summarize(turns, ""))
+                    break
+                except Exception as exc:
+                    last_error = exc
+            if summary is None:
+                logger.error(
+                    "Rolling summary rebuild failed after 3 attempts: {}",
+                    last_error,
+                )
+                return False
+
+            end_turn = len(all_turns)
+            start_turn = max(1, end_turn - len(turns) + 1)
+            return self._write_metadata(
+                conf_uid,
+                history_uid,
+                {
+                    ROLLING_SUMMARY_METADATA_KEY: {
+                        "text": summary,
+                        "start_turn": start_turn,
+                        "end_turn": end_turn,
+                        "generated_at_turn": end_turn,
+                        "summarized_normal_turns": end_turn,
+                        "batch_size": len(turns),
+                    }
+                },
+            )
+
 
 rolling_summary_manager = RollingSummaryManager()

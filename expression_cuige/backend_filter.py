@@ -81,6 +81,7 @@ def process_output(display_text: str, tts_text: str) -> dict[str, Any]:
     # the synthesis engine can still use them as emotional cues.
     cleaned_display = _strip_bracket_markers(cleaned_display)
     raw_emotion = display_emotion or tts_emotion
+    protocol_detected = display_emotion is not None or tts_emotion is not None
     emotion = raw_emotion if raw_emotion in allowed_emotions else None
     if raw_emotion is not None and emotion is None:
         emotion = "中性" if "中性" in allowed_emotions else None
@@ -92,4 +93,6 @@ def process_output(display_text: str, tts_text: str) -> dict[str, Any]:
         "display_text": cleaned_display,
         "tts_text": cleaned_tts,
         "emotion": emotion,
+        "raw_emotion": raw_emotion,
+        "protocol_detected": protocol_detected,
     }

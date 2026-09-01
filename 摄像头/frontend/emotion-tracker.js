@@ -7,6 +7,8 @@ const SMOOTHING_WINDOW_MS = 550;
 const EXPRESSION_STABILITY_MS = 280;
 const AMBIGUOUS_STABILITY_MS = 360;
 const NEUTRAL_STABILITY_MS = 300;
+const DURATION_ROUNDING_MS = 100;
+const MAXIMUM_AGGREGATE_EMOTIONS = 2;
 const MINIMUM_TEMPLATE_SCALE = 0;
 const MAXIMUM_RESIDUAL_RATIO = 1;
 const MINIMUM_EFFECTIVE_AUS = 1;
@@ -139,6 +141,10 @@ function templateMatchMetrics(vector, template, queryNorm) {
 
 function inferenceLabels(result) {
   return Array.isArray(result?.emotions) ? result.emotions : [];
+}
+
+function emotionGroupKey(labels) {
+  return labels.join('|');
 }
 
 function stabilityDuration(result) {
@@ -715,9 +721,15 @@ export class EmotionTracker {
     const elapsed = Math.max(0, now - this.windowLastUpdatedAt);
     if (this.windowCurrentSegment) {
       this.windowCurrentSegment.durationMs += elapsed;
+      const labels = this.windowCurrentSegment.labels;
+      const key = emotionGroupKey(labels);
+      const previousDurationMs = this.windowSegments
+        .filter((segment) => emotionGroupKey(segment.labels) === key)
+        .reduce((sum, segment) => sum + segment.durationMs, 0);
       this.onSegmentState({
-        durationMs: this.windowCurrentSegment.durationMs,
+        durationMs: previousDurationMs + this.windowCurrentSegment.durationMs,
         thresholdMs: this.settings.emotionSegmentMinMs,
+        eligible: !labels.includes('neutral'),
       });
     }
     this.windowLastUpdatedAt = now;
@@ -769,68 +781,59 @@ export class EmotionTracker {
     this.startWindow();
   }
 
-  aggregateWindow() {
+  aggregateWindow({
+    thresholdMs = this.settings.emotionSegmentMinMs,
+    maxEmotions = MAXIMUM_AGGREGATE_EMOTIONS,
+  } = {}) {
     const segments = this.windowCurrentSegment
       ? [...this.windowSegments, this.windowCurrentSegment]
       : [...this.windowSegments];
 
-    // 非中性段连续时长低于阈值则丢弃；中性段不受阈值限制，始终保留。
-    const thresholdMs = this.settings.emotionSegmentMinMs;
-    const kept = segments.filter((segment) => (
-      segment.labels.includes('neutral')
-      || segment.durationMs >= thresholdMs
-    ));
-
-    const totalDuration = kept.reduce((sum, segment) => sum + segment.durationMs, 0);
-    const firstSeen = new Map();
-    kept.forEach((segment, sequenceIndex) => {
-      segment.labels.forEach((emotion, emotionIndex) => {
-        if (!firstSeen.has(emotion)) {
-          firstSeen.set(emotion, sequenceIndex * 2 + emotionIndex);
-        }
-      });
+    // 先按完整表情组合累加各段时长，再过滤累计不足阈值的结果。
+    // 中性不参与累计列表；若整轮没有达标的非中性表情，则回退为中性。
+    const groups = new Map();
+    segments.forEach((segment, index) => {
+      const labels = segment.labels.filter((emotion) => emotion !== 'neutral');
+      if (!labels.length || segment.durationMs <= 0) return;
+      const key = emotionGroupKey(labels);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.durationMs += segment.durationMs;
+      } else {
+        groups.set(key, { labels: [...labels], durationMs: segment.durationMs, firstSeen: index });
+      }
     });
 
-    const durations = {};
-    for (const segment of kept) {
-      const share = segment.labels.length
-        ? segment.durationMs / segment.labels.length
-        : 0;
-      for (const emotion of segment.labels) {
-        durations[emotion] = (durations[emotion] || 0) + share;
-      }
-    }
+    const emotionDurations = [...groups.values()]
+      .filter((group) => group.durationMs >= thresholdMs)
+      .sort((left, right) => right.durationMs - left.durationMs || left.firstSeen - right.firstSeen)
+      .slice(0, maxEmotions)
+      .map((group) => ({
+        emotions: group.labels,
+        duration_ms: Math.round(group.durationMs / DURATION_ROUNDING_MS)
+          * DURATION_ROUNDING_MS,
+      }))
+      .filter((group) => group.duration_ms > 0);
 
-    const durationEntries = Object.entries(durations)
-      .filter(([, duration]) => duration > 0);
-    const nonNeutralEntries = durationEntries
-      .filter(([emotion]) => emotion !== 'neutral');
-    const candidates = nonNeutralEntries.length
-      ? nonNeutralEntries
-      : durationEntries.filter(([emotion]) => emotion === 'neutral');
-    const emotions = candidates
-      .sort((left, right) => (
-        right[1] - left[1]
-        || (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
-          - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
-      ))
-      .slice(0, 2)
-      .sort((left, right) => (
-        (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
-          - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
-      ))
-      .map(([emotion]) => emotion);
+    const emotions = [...new Set(emotionDurations.flatMap((group) => group.emotions))]
+      .slice(0, maxEmotions);
+    const totalDuration = emotionDurations
+      .reduce((sum, group) => sum + group.duration_ms, 0);
+    const neutralDuration = segments
+      .filter((segment) => segment.labels.includes('neutral'))
+      .reduce((sum, segment) => sum + segment.durationMs, 0);
 
     return {
       emotions: emotions.length ? emotions : ['neutral'],
-      valid_duration_ms: Math.round(totalDuration),
+      emotion_durations: emotionDurations,
+      valid_duration_ms: emotions.length ? totalDuration : Math.round(neutralDuration),
     };
   }
 
   // 窗口内心率均值；样本不足时返回 null（不参与 prompt 拼接）。
-  windowHeartRateAggregate() {
+  windowHeartRateAggregate(minimumSamples = WINDOW_HEART_RATE_MINIMUM_SAMPLES) {
     const samples = this.windowHeartRateSamples;
-    if (samples.length < WINDOW_HEART_RATE_MINIMUM_SAMPLES) return null;
+    if (samples.length < minimumSamples) return null;
     const total = samples.reduce((sum, sample) => sum + sample.bpm, 0);
     const average = total / samples.length;
     if (!Number.isFinite(average)) return null;
@@ -848,7 +851,7 @@ export class EmotionTracker {
     return { bpm: Math.round(this.latestHeartRate.bpm), at: this.latestHeartRate.at };
   }
 
-  consumeWindow() {
+  consumeWindow(options = {}) {
     if (!this.baselineAu) {
       this.windowRequested = false;
       this.windowActive = false;
@@ -864,8 +867,10 @@ export class EmotionTracker {
     this.windowRequested = false;
     this.windowLastLabels = [];
     this.windowLastInferenceKey = '';
-    const aggregate = this.aggregateWindow();
-    const heartRate = this.windowHeartRateAggregate();
+    const aggregate = this.aggregateWindow(options);
+    const heartRate = this.windowHeartRateAggregate(
+      options.heartRateMinimumSamples ?? WINDOW_HEART_RATE_MINIMUM_SAMPLES,
+    );
     this.windowHeartRateSamples = [];
     return heartRate ? { ...aggregate, heart_rate: heartRate } : aggregate;
   }

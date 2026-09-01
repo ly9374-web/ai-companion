@@ -33,6 +33,12 @@ export function createCameraEmotionFeature(config = {}) {
   let running = false;
   let activeProfile = null;
   let currentSettings = { ...DEFAULT_RUNTIME_SETTINGS };
+  let activeAssistantSegment = null;
+  let assistantResponseActive = false;
+  let assistantSegments = [];
+  let assistantHeartRateTotal = 0;
+  let assistantHeartRateSamples = 0;
+  let completedAssistantResponse = null;
   const profileStateListeners = new Set();
   const calibrationListeners = new Set();
 
@@ -226,11 +232,17 @@ export function createCameraEmotionFeature(config = {}) {
       } else if (event === 'service_error') {
         const message = String(details?.message || 'AIe 鉴权或连接失败');
         tracker.connectionFailed(
-          message.includes('token') || message.includes('鉴权')
-            ? 'AIe 鉴权失败，请检查 emotion_camera/.env'
+          message.includes('502') || message.includes('503') || message.includes('504')
+            ? '云端表情识别服务暂时不可用，正在自动重试…'
+            : message.includes('token') || message.includes('鉴权')
+              ? 'AIe 鉴权失败，请检查 emotion_camera/.env'
             : `AIe 服务错误：${message}`,
         );
-      } else if (event === 'websocket_closed' && details?.reconnecting) {
+      } else if (
+        event === 'websocket_closed'
+        && details?.reconnecting
+        && !details?.service_error
+      ) {
         const reason = String(details?.reason || '');
         tracker.connectionFailed(
           reason.includes('Invalid token')
@@ -255,7 +267,9 @@ export function createCameraEmotionFeature(config = {}) {
       try {
         if (typeof data === 'string') {
           const message = JSON.parse(data);
-          if (message?.type === 'interrupt-signal') tracker.startWindow();
+          if (message?.type === 'interrupt-signal' && !assistantResponseActive) {
+            tracker.startWindow();
+          }
           if (message?.type === 'set-debug-mode' && typeof message.enabled === 'boolean') {
             display.setDebugMode(message.enabled);
           }
@@ -276,6 +290,63 @@ export function createCameraEmotionFeature(config = {}) {
 
   const stopObservingInterruptSignals = () => {
     restoreWebSocketSend?.();
+  };
+
+  const resetAssistantResponse = () => {
+    activeAssistantSegment = null;
+    assistantSegments = [];
+    assistantHeartRateTotal = 0;
+    assistantHeartRateSamples = 0;
+  };
+
+  const shortenInterruptedText = (text, playbackRatio) => {
+    const normalized = String(text || '').trim();
+    const ratio = Number(playbackRatio);
+    if (!normalized || !Number.isFinite(ratio) || ratio >= 0.995) return normalized;
+    const length = Math.max(1, Math.round(normalized.length * Math.max(0, ratio)));
+    const prefix = normalized.slice(0, length).trim();
+    return prefix && prefix.length < normalized.length ? `${prefix}…` : prefix;
+  };
+
+  const finishActiveAssistantSegment = ({ interrupted = false, playbackRatio = 1 } = {}) => {
+    if (!activeAssistantSegment) return;
+    const segment = activeAssistantSegment;
+    activeAssistantSegment = null;
+    const aggregate = tracker.consumeWindow({
+      thresholdMs: 300,
+      maxEmotions: 1,
+      heartRateMinimumSamples: 1,
+    });
+    const heartRate = aggregate?.heart_rate;
+    if (heartRate && Number.isFinite(heartRate.avg_bpm) && Number.isFinite(heartRate.sample_count)) {
+      assistantHeartRateTotal += heartRate.avg_bpm * heartRate.sample_count;
+      assistantHeartRateSamples += heartRate.sample_count;
+    }
+    const group = aggregate?.emotion_durations?.[0];
+    const emotion = group?.emotions?.find((value) => value !== 'neutral');
+    if (emotion && Number(group?.duration_ms) >= 300) {
+      assistantSegments.push({
+        text: interrupted
+          ? shortenInterruptedText(segment.text, playbackRatio)
+          : String(segment.text || '').trim(),
+        emotion,
+        duration_ms: group.duration_ms,
+        interrupted: interrupted === true,
+      });
+    }
+  };
+
+  const assistantResponseAggregate = () => {
+    const result = {
+      listening_segments: [...assistantSegments],
+    };
+    if (assistantHeartRateSamples >= 3) {
+      result.assistant_heart_rate = {
+        avg_bpm: Math.round(assistantHeartRateTotal / assistantHeartRateSamples),
+        sample_count: assistantHeartRateSamples,
+      };
+    }
+    return result.listening_segments.length || result.assistant_heart_rate ? result : null;
   };
 
   // Observe the session debug switch even while the camera itself is closed.
@@ -311,9 +382,12 @@ export function createCameraEmotionFeature(config = {}) {
       tracker.reset();
       display.clear();
       display.hide();
+      resetAssistantResponse();
+      assistantResponseActive = false;
+      completedAssistantResponse = null;
     },
     startWindow() {
-      display.setFinal(null);
+      display.setFinalAggregate(null);
       tracker.startWindow();
     },
     pauseWindow() {
@@ -322,14 +396,55 @@ export function createCameraEmotionFeature(config = {}) {
     // Kept for compatibility with an already-built host frontend. Resuming an
     // assistant-paused window starts the next user turn with an empty summary.
     resumeWindow() {
-      display.setFinal(null);
+      display.setFinalAggregate(null);
       tracker.startWindow();
     },
     consumeWindow() {
       const aggregate = tracker.consumeWindow();
-      display.setFinal(aggregate?.emotions || null);
-      reportDiagnostic(aggregate ? 'aggregate_ready' : 'aggregate_empty', aggregate || {});
-      return aggregate;
+      const result = aggregate || completedAssistantResponse
+        ? { ...(aggregate || {}), ...(completedAssistantResponse || {}) }
+        : null;
+      completedAssistantResponse = null;
+      display.setFinalAggregate(result);
+      reportDiagnostic(result ? 'aggregate_ready' : 'aggregate_empty', result || {});
+      return result;
+    },
+    beginAssistantResponse() {
+      tracker.pauseWindow();
+      resetAssistantResponse();
+      assistantResponseActive = true;
+      completedAssistantResponse = null;
+    },
+    startAssistantSegment(text) {
+      if (!assistantResponseActive) return;
+      finishActiveAssistantSegment({ interrupted: true, playbackRatio: 1 });
+      activeAssistantSegment = { text: String(text || '') };
+      tracker.startWindow();
+    },
+    finishAssistantSegment(details = {}) {
+      if (!assistantResponseActive) return;
+      finishActiveAssistantSegment(details);
+    },
+    finishAssistantResponse() {
+      if (!assistantResponseActive) {
+        tracker.startWindow();
+        return;
+      }
+      finishActiveAssistantSegment({ interrupted: true, playbackRatio: 1 });
+      completedAssistantResponse = assistantResponseAggregate();
+      display.setFinalAggregate(completedAssistantResponse);
+      reportDiagnostic(
+        completedAssistantResponse ? 'assistant_aggregate_ready' : 'assistant_aggregate_empty',
+        completedAssistantResponse || {},
+      );
+      resetAssistantResponse();
+      assistantResponseActive = false;
+      tracker.startWindow();
+    },
+    consumeAssistantResponse() {
+      const result = completedAssistantResponse;
+      completedAssistantResponse = null;
+      return result;
     },
     // 最近一次有效心率（5 秒内），供“按 j 带入心率”在发消息时读取。
     getLatestHeartRate() {

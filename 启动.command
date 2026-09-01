@@ -25,7 +25,7 @@ if [ -n "$LISTENER_PIDS" ]; then
     fi
 
     if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-        echo "[ERROR] 无法释放端口 $PORT，请手动关闭占用该端口的进程。"
+        echo "[ERROR] 无法释放端口 ${PORT}，请手动关闭占用该端口的进程。"
         read -r -p "按回车键关闭窗口..."
         exit 1
     fi

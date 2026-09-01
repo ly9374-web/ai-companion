@@ -23,6 +23,25 @@ class _RecordingAgent:
 
 
 class SystemPromptRefreshTests(unittest.IsolatedAsyncioTestCase):
+    def test_editable_prompt_excludes_fixed_expression_section(self):
+        context = ServiceContext()
+        context.character_config = SimpleNamespace()
+        context.live2d_model = SimpleNamespace(emo_str="[smile]")
+
+        with patch.object(
+            context,
+            "_render_default_system_prompt",
+            return_value="默认人物设定\n\n#声音效果与表情\n固定表情规则",
+        ), patch.object(
+            context,
+            "_read_override",
+            return_value="账户编辑后的人物设定",
+        ):
+            editable = context.get_editable_system_prompt()
+
+        self.assertEqual(editable, "账户编辑后的人物设定")
+        self.assertNotIn("固定表情规则", editable)
+
     async def test_refresh_updates_active_agent_when_prompt_changes(self):
         context = ServiceContext()
         context.character_config = validate_config(

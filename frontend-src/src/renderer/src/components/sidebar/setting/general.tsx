@@ -15,16 +15,13 @@ import {
 } from "@/constants/max-history-turns";
 import { toaster } from "@/components/ui/toaster";
 import { ROLLING_SUMMARY_TOAST_ID } from "@/constants/manual-summary";
+import { PERSONA_PROFILE_TOAST_ID } from "@/constants/persona-profile";
 import {
   getGeneralRuntimeSettings,
   setGeneralRuntimeSettings,
 } from "@/constants/general-runtime-settings";
 import { useAccount } from "@/context/account-context";
-import { optionalFeature } from "@optional-feature";
-
-const EMOTION_SEGMENT_MIN_MS_MIN = 0;
-const EMOTION_SEGMENT_MIN_MS_MAX = 10000;
-const EMOTION_SEGMENT_ACCOUNT_SUFFIX = 'cs';
+import { OptionalGeneralSettings } from "@optional-feature";
 
 interface GeneralProps {
   onSave?: (callback: () => void) => () => void;
@@ -84,15 +81,6 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     initialRuntimeSettings.generateAudio,
   );
   const [debugMode, setDebugMode] = useState(initialRuntimeSettings.debugMode);
-  const { account } = useAccount();
-  const isEmotionSegmentAccount = Boolean(account)
-    && account!.toLowerCase().endsWith(EMOTION_SEGMENT_ACCOUNT_SUFFIX);
-  const [emotionSegmentMinMs, setEmotionSegmentMinMs] = useState(
-    () => optionalFeature.getEmotionSegmentMinMs(),
-  );
-  const emotionSegmentMinMsRef = useRef(emotionSegmentMinMs);
-  emotionSegmentMinMsRef.current = emotionSegmentMinMs;
-  const savedEmotionSegmentMinMsRef = useRef(emotionSegmentMinMs);
   const runtimeSettingsRef = useRef({ generateAudio, debugMode });
   const savedRuntimeSettingsRef = useRef(initialRuntimeSettings);
   runtimeSettingsRef.current = { generateAudio, debugMode };
@@ -113,18 +101,6 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
     }
   };
 
-  const handleEmotionSegmentMinMsChange = (value: string): void => {
-    const ms = Number.parseInt(value, 10);
-    if (
-      !Number.isNaN(ms)
-      && ms >= EMOTION_SEGMENT_MIN_MS_MIN
-      && ms <= EMOTION_SEGMENT_MIN_MS_MAX
-    ) {
-      setEmotionSegmentMinMs(ms);
-      optionalFeature.setEmotionSegmentMinMs(ms);
-    }
-  };
-
   useEffect(() => {
     if (!onSave || !onCancel) return undefined;
 
@@ -132,15 +108,11 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
       const nextSettings = runtimeSettingsRef.current;
       savedRuntimeSettingsRef.current = nextSettings;
       setGeneralRuntimeSettings(nextSettings);
-      savedEmotionSegmentMinMsRef.current = emotionSegmentMinMsRef.current;
     });
     const removeCancel = onCancel(() => {
       const savedSettings = savedRuntimeSettingsRef.current;
       setGenerateAudio(savedSettings.generateAudio);
       setDebugMode(savedSettings.debugMode);
-      const savedMs = savedEmotionSegmentMinMsRef.current;
-      setEmotionSegmentMinMs(savedMs);
-      optionalFeature.setEmotionSegmentMinMs(savedMs);
       if (wsState === "OPEN") {
         sendMessage({
           type: "set-generate-audio",
@@ -175,6 +147,27 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
       return;
     }
     sendMessage({ type: "summarize-rolling-context" });
+  };
+
+  const handlePersonaProfile = (): void => {
+    const loadingToast = {
+      title: t("notification.personaProfileStarting"),
+      type: "loading" as const,
+    };
+    if (toaster.isVisible(PERSONA_PROFILE_TOAST_ID)) {
+      toaster.update(PERSONA_PROFILE_TOAST_ID, loadingToast);
+    } else {
+      toaster.create({ id: PERSONA_PROFILE_TOAST_ID, ...loadingToast });
+    }
+    if (wsState !== "OPEN") {
+      toaster.update(PERSONA_PROFILE_TOAST_ID, {
+        title: t("error.websocketNotOpen"),
+        type: "error",
+        duration: 3000,
+      });
+      return;
+    }
+    sendMessage({ type: "generate-persona-profile" });
   };
 
   const handleQwenTtsOptionsChange = useCallback(
@@ -288,18 +281,11 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
         help={t("settings.general.debugModeHelp")}
       />
 
-      {isEmotionSegmentAccount && (
-        <NumberField
-          label={t("settings.general.emotionSegmentMinMs")}
-          value={emotionSegmentMinMs}
-          onChange={handleEmotionSegmentMinMsChange}
-          min={EMOTION_SEGMENT_MIN_MS_MIN}
-          max={EMOTION_SEGMENT_MIN_MS_MAX}
-          step={100}
-          allowMouseWheel
-          help={t("settings.general.emotionSegmentMinMsHelp")}
-        />
-      )}
+      <OptionalGeneralSettings onSave={onSave} onCancel={onCancel} />
+
+      <Button colorPalette="purple" onClick={handlePersonaProfile}>
+        {t("settings.general.personaProfile")}
+      </Button>
 
       {debugMode && (
         <Button colorPalette="blue" onClick={handleRollingSummary}>

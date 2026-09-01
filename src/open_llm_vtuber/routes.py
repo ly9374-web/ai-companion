@@ -17,6 +17,7 @@ from .optional_features import (
     get_optional_feature,
     get_expression_feature_dir,
     get_expression_manifest,
+    get_optional_public_account_features,
 )
 from .character_generation import (
     MAX_UPLOAD_BYTES,
@@ -32,7 +33,7 @@ from .account_manager import (
     InvalidPassword,
     authenticate_account,
     create_persistent_session,
-    has_conversation_starters,
+    get_persisted_account_features,
     register_account,
     resolve_authenticated_session,
     revoke_persistent_session,
@@ -40,7 +41,10 @@ from .account_manager import (
 
 
 def _account_features(account: str) -> dict[str, bool]:
-    return {"conversationStarters": has_conversation_starters(account)}
+    return get_optional_public_account_features(
+        account,
+        get_persisted_account_features(account),
+    )
 
 
 def init_account_routes() -> APIRouter:
@@ -420,16 +424,6 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
         }
         logger.info("Optional feature diagnostic: {} | {}", event, safe_details)
         return JSONResponse({"ok": True})
-
-    @router.get("/web-tool")
-    async def web_tool_redirect():
-        """Redirect /web-tool to /web_tool/index.html"""
-        return Response(status_code=302, headers={"Location": "/web-tool/index.html"})
-
-    @router.get("/web_tool")
-    async def web_tool_redirect_alt():
-        """Redirect /web_tool to /web_tool/index.html"""
-        return Response(status_code=302, headers={"Location": "/web-tool/index.html"})
 
     @router.get("/live2d-models/info")
     async def get_live2d_folder_info():

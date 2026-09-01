@@ -27,10 +27,10 @@ export class AieWebSocketClient {
 
       socket.onopen = () => {
         if (this.socket !== socket) return;
-        this.retryCount = 0;
         this.ready = false;
         socket.cameraEmotionOpenedAt = Date.now();
         socket.cameraEmotionReceivedMessage = false;
+        socket.cameraEmotionServiceError = false;
         this.onStatus('websocket_open', {
           protocol: socket.protocol || '',
           extensions: socket.extensions || '',
@@ -53,15 +53,16 @@ export class AieWebSocketClient {
             // 与参考实现对齐：连接后只发 JPEG 帧，不发控制指令。
             // 云端收到 start_detection 后可能进入不产出 rPPG 心率的管线。
             this.ready = true;
+            this.retryCount = 0;
             this.onStatus('authenticated', {});
           } else if (message.type === 'error') {
             this.ready = false;
+            socket.cameraEmotionServiceError = true;
             this.onStatus('service_error', {
               code: String(message.code || ''),
               message: String(message.message || '').slice(0, 300),
             });
             console.warn('[CameraEmotion] AIE 服务返回错误:', message.code, message.message);
-            this.onConnectionLost(String(message.message || 'AIe 鉴权或连接失败'));
             if (message.code === 'PIPELINE_NOT_READY' || message.code === 'REALTIME_SESSION_BUSY') {
               socket.close();
             }
@@ -95,8 +96,11 @@ export class AieWebSocketClient {
             ? Date.now() - socket.cameraEmotionOpenedAt
             : 0,
           received_message: socket.cameraEmotionReceivedMessage === true,
+          service_error: socket.cameraEmotionServiceError === true,
         });
-        this.onConnectionLost(reconnecting ? '表情识别连接中断，正在重连…' : null);
+        if (!socket.cameraEmotionServiceError) {
+          this.onConnectionLost(reconnecting ? '表情识别连接中断，正在重连…' : null);
+        }
         this.scheduleReconnect();
       };
     } catch (error) {

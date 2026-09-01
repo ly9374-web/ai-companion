@@ -19,9 +19,7 @@ interface AccountResult {
   connectionError?: boolean;
 }
 
-interface AccountFeatures {
-  conversationStarters: boolean;
-}
+export type AccountFeatures = Record<string, boolean>;
 
 type AccountFailure = 'authentication' | 'network' | 'server' | 'request';
 
@@ -88,9 +86,7 @@ const requestAccount = async (
 
 export function AccountProvider({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<string | null>(null);
-  const [features, setFeatures] = useState<AccountFeatures>({
-    conversationStarters: false,
-  });
+  const [features, setFeatures] = useState<AccountFeatures>({});
   const [loading, setLoading] = useState(isAccountSessionActive());
 
   const finishAuthentication = useCallback((
@@ -101,9 +97,10 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
     rememberAuthenticatedAccount(canonicalAccount, sessionToken);
     wsService.setAccount(canonicalAccount, sessionToken);
     setAccount(canonicalAccount);
-    setFeatures({
-      conversationStarters: nextFeatures.conversationStarters === true,
-    });
+    setFeatures(Object.fromEntries(
+      Object.entries(nextFeatures)
+        .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+    ));
   }, []);
 
   const login = useCallback(async (
@@ -153,7 +150,7 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
     wsService.setAccount(null);
     rememberLoggedOut();
     setAccount(null);
-    setFeatures({ conversationStarters: false });
+    setFeatures({});
     setLoading(false);
   }, []);
 
