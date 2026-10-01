@@ -20,9 +20,11 @@ function ASR({ onSave, onCancel }: ASRProps): JSX.Element {
     autoStopMic,
     autoStartMicOn,
     autoStartMicOnConvEnd,
+    autoGenerateAudioOnMic,
     setAutoStopMic,
     setAutoStartMicOn,
     setAutoStartMicOnConvEnd,
+    setAutoGenerateAudioOnMic,
     handleInputChange,
     handleSave,
     handleCancel,
@@ -58,6 +60,12 @@ function ASR({ onSave, onCancel }: ASRProps): JSX.Element {
         label={t('settings.asr.autoStartMicOn')}
         checked={autoStartMicOn}
         onChange={setAutoStartMicOn}
+      />
+
+      <SwitchField
+        label={t('settings.asr.autoGenerateAudioOnMic')}
+        checked={autoGenerateAudioOnMic}
+        onChange={setAutoGenerateAudioOnMic}
       />
 
       <Agent onSave={onSave} onCancel={onCancel} embedded />

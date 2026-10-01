@@ -2,18 +2,23 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 /* eslint-disable no-use-before-define */
 import { Subject } from 'rxjs';
-import { ModelInfo } from '@/context/live2d-config-context';
-import { HistoryInfo } from '@/context/websocket-context';
-import { ConfigFile } from '@/context/character-config-context';
+import type { ModelInfo } from '@/context/live2d-config-context';
+import type { HistoryInfo } from '@/context/websocket-context';
+import type { ConfigFile } from '@/context/character-config-context';
 import { toaster } from '@/components/ui/toaster';
 import { getStoredQwenTtsOptions } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
-import { getStoredRagSettings } from '@/constants/rag-settings';
+import {
+  getStoredRagSettings,
+  RAG_SETTINGS_KEY,
+  sanitizeRagSettings,
+} from '@/constants/rag-settings';
 import {
   getStoredApiKeys,
   isGrokEnabledForPageSession,
 } from '@/constants/api-keys';
 import { getGeneralRuntimeSettings } from '@/constants/general-runtime-settings';
+import type { SpeechSegment } from '@/components/profiler/audio-timeline';
 
 export interface DisplayText {
   text: string;
@@ -34,6 +39,7 @@ export interface AudioPayload {
   display_text?: DisplayText;
   actions?: Actions;
   emotion?: string;
+  speech_segments?: SpeechSegment[];
 }
 
 export interface Message {
@@ -41,6 +47,7 @@ export interface Message {
   content: string;
   role: "ai" | "human";
   timestamp: string;
+  sort_time?: number;
   name?: string;
   avatar?: string;
 
@@ -49,6 +56,8 @@ export interface Message {
   tool_id?: string; // Specific to tool calls
   tool_name?: string; // Specific to tool calls
   status?: 'running' | 'completed' | 'error'; // Specific to tool calls
+  media_urls?: string[]; // Media URLs returned by tool results (e.g. MiniMax generated files)
+  image_ids?: string[];
 }
 
 export interface Actions {
@@ -58,6 +67,7 @@ export interface Actions {
 }
 
 export interface MessageEvent {
+  request_id?: string;
   tool_id: any;
   tool_name: any;
   name: any;
@@ -65,6 +75,11 @@ export interface MessageEvent {
   content: string;
   timestamp: string;
   type: string;
+  media_urls?: string[]; // Media URLs returned by tool results
+  image_ids?: string[];
+  generated_images?: { id: string; created_at: number }[];
+  configured?: boolean;
+  available?: boolean;
   audio?: string;
   volumes?: number[];
   slice_length?: number;
@@ -89,6 +104,7 @@ export interface MessageEvent {
   voice?: string;
   instruction?: string;
   emotion?: string;
+  speech_segments?: SpeechSegment[];
   max_history_turns?: number;
   long_term_memory?: string;
   short_term_relationship?: string;
@@ -104,6 +120,13 @@ export interface MessageEvent {
   current?: number;
   total?: number;
   request_type?: string;
+  enabled?: boolean;
+  entries?: { id: string; created_at: string; prompt: string }[];
+  expires_at?: number | null;
+  top_k?: number;
+  threshold?: number;
+  hybrid_weight?: number;
+  persisted?: boolean;
 }
 
 // Get translation function for error messages
@@ -142,7 +165,6 @@ class WebSocketService {
   }
 
   private initializeConnection() {
-    const ragSettings = getStoredRagSettings();
     const apiKeys = getStoredApiKeys();
     const generalSettings = getGeneralRuntimeSettings();
     this.sendMessage({
@@ -152,6 +174,8 @@ class WebSocketService {
       grok_api_key: apiKeys.grokApiKey,
       grok_enabled: isGrokEnabledForPageSession(),
       qwen_api_key: apiKeys.qwenApiKey,
+      // MiniMax is loaded from the authenticated account on the server.
+      minimax_api_key: '',
     });
     this.sendMessage({
       type: 'set-generate-audio',
@@ -171,12 +195,6 @@ class WebSocketService {
       max_history_turns: getStoredMaxHistoryTurns(),
     });
     this.sendMessage({
-      type: 'set-rag-options',
-      top_k: ragSettings.topK,
-      threshold: ragSettings.threshold,
-      hybrid_weight: ragSettings.hybridWeight,
-    });
-    this.sendMessage({
       type: 'fetch-backgrounds',
     });
     this.sendMessage({
@@ -190,7 +208,7 @@ class WebSocketService {
     });
   }
 
-  connect(url: string) {
+  connect(url: string, initializeDesktopSession = true) {
     if (!this.accountName || !this.sessionToken) {
       this.disconnect();
       return;
@@ -211,13 +229,34 @@ class WebSocketService {
         if (this.ws !== socket || generation !== this.connectionGeneration) return;
         this.currentState = 'OPEN';
         this.stateSubject.next('OPEN');
-        this.initializeConnection();
+        if (initializeDesktopSession) this.initializeConnection();
       };
 
       socket.onmessage = (event) => {
         if (this.ws !== socket || generation !== this.connectionGeneration) return;
         try {
           const message = JSON.parse(event.data);
+          if (message.type === 'rag-options-updated' &&
+              typeof message.top_k === 'number' &&
+              typeof message.threshold === 'number' &&
+              typeof message.hybrid_weight === 'number') {
+            const legacySettings = window.localStorage.getItem(RAG_SETTINGS_KEY);
+            if (message.persisted === false && legacySettings && initializeDesktopSession) {
+              const settings = getStoredRagSettings();
+              this.sendMessage({
+                type: 'set-rag-options',
+                top_k: settings.topK,
+                threshold: settings.threshold,
+                hybrid_weight: settings.hybridWeight,
+              });
+            } else if (message.persisted !== false || !legacySettings) {
+              window.localStorage.setItem(RAG_SETTINGS_KEY, JSON.stringify(sanitizeRagSettings({
+                topK: message.top_k,
+                threshold: message.threshold,
+                hybridWeight: message.hybrid_weight,
+              })));
+            }
+          }
           this.messageSubject.next(message);
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
@@ -251,6 +290,7 @@ class WebSocketService {
   sendMessage(message: object) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
+      return true;
     } else {
       console.warn('WebSocket is not open. Unable to send message:', message);
       toaster.create({
@@ -258,6 +298,7 @@ class WebSocketService {
         type: 'error',
         duration: 2000,
       });
+      return false;
     }
   }
 

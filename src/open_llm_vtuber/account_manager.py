@@ -30,6 +30,11 @@ MAX_PASSWORD_LENGTH = 128
 _INVALID_ACCOUNT_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _ACCOUNT_LOCK = threading.RLock()
 _ACCOUNT_MARKER_NAME = ".account.json"
+_LAST_STATE_KEY = "last_state"
+_LAST_STATE_FIELDS = ("role_file", "voice", "instruction_preset")
+_PENDING_TTS_VOICES_KEY = "pending_tts_voice_changes"
+_RAG_OPTIONS_KEY = "rag_options"
+_MINIMAX_API_KEY = "minimax_api_key"
 _LAYOUT_MARKER_NAME = ".account-layout-v2.json"
 _MIGRATION_CONFLICT_DIR = ".migration-conflicts"
 _PASSWORD_ITERATIONS = 210_000
@@ -43,9 +48,8 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"LPT{index}" for index in range(1, 10)),
 }
 
-LONG_TERM_RELATIONSHIP_DEFAULT = {
-    "long_term_relationship": "暂无",
-}
+CURRENT_RELATIONSHIP_SCORE_DEFAULT = 3
+
 SHORT_TERM_RELATIONSHIP_DEFAULT = {
     "short_term_relationship": (
         "这是你第一次见到这位用户，你很高兴如果和他聊的开心，"
@@ -146,7 +150,7 @@ def get_account_history_root(account_name: str) -> Path:
 def get_character_conf_uids() -> list[str]:
     """Read every configured role UID, with the default role first."""
     config_paths = [Path("conf.yaml")]
-    characters_dir = Path("characters")
+    characters_dir = Path("content/characters")
     if characters_dir.is_dir():
         config_paths.extend(sorted(characters_dir.rglob("*.yaml")))
 
@@ -202,6 +206,30 @@ def _write_account_marker(account_name: str, payload: dict[str, object]) -> None
     _write_json(marker_path, payload)
 
 
+def get_persisted_minimax_api_key(account_name: str) -> str:
+    """Read a private, account-scoped MiniMax credential on the server only."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        return ""
+    with _ACCOUNT_LOCK:
+        key = _read_account_marker(account).get(_MINIMAX_API_KEY)
+    return key if isinstance(key, str) else ""
+
+
+def update_persisted_minimax_api_key(account_name: str, key: str) -> None:
+    """Replace or remove the account's MiniMax key without returning it to clients."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号不存在")
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        if key:
+            marker[_MINIMAX_API_KEY] = key
+        else:
+            marker.pop(_MINIMAX_API_KEY, None)
+        _write_account_marker(account, marker)
+
+
 def get_persisted_account_features(account_name: str) -> dict[str, bool]:
     """Return validated feature metadata without assigning runtime behavior."""
     account = resolve_account_name(account_name)
@@ -219,6 +247,136 @@ def get_persisted_account_features(account_name: str) -> dict[str, bool]:
         }
 
 
+def get_persisted_last_state(account_name: str) -> dict[str, str | None] | None:
+    """Read the last desktop selection from the existing account marker."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        return None
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        saved = marker.get(_LAST_STATE_KEY)
+        if not isinstance(saved, dict):
+            return None
+        state = {
+            field: saved.get(field)
+            if isinstance(saved.get(field), str) and saved.get(field)
+            else None
+            for field in _LAST_STATE_FIELDS
+        }
+        return state if any(state.values()) else None
+
+
+def update_persisted_last_state(
+    account_name: str,
+    *,
+    role_file: str | None = None,
+    voice: str | None = None,
+    instruction_preset: str | None = None,
+) -> None:
+    """Atomically update supplied selection fields without dropping other metadata."""
+    updates = {
+        field: value
+        for field, value in {
+            "role_file": role_file,
+            "voice": voice,
+            "instruction_preset": instruction_preset,
+        }.items()
+        if isinstance(value, str) and value
+    }
+    if not updates:
+        return
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号不存在")
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        saved = marker.get(_LAST_STATE_KEY)
+        state = dict(saved) if isinstance(saved, dict) else {}
+        state.update(updates)
+        marker[_LAST_STATE_KEY] = state
+        _write_account_marker(account, marker)
+
+
+def get_persisted_rag_options(account_name: str) -> dict[str, float] | None:
+    """Read the account-wide RAG retrieval settings shared across devices."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        return None
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        saved = marker.get(_RAG_OPTIONS_KEY)
+    if not isinstance(saved, dict):
+        return None
+    try:
+        top_k = int(saved["top_k"])
+        threshold = float(saved["threshold"])
+        hybrid_weight = float(saved["hybrid_weight"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not 1 <= top_k <= 20:
+        return None
+    return {
+        "top_k": top_k,
+        "threshold": max(0.0, min(1.0, threshold)),
+        "hybrid_weight": max(0.0, min(1.0, hybrid_weight)),
+    }
+
+
+def update_persisted_rag_options(
+    account_name: str,
+    *,
+    top_k: int,
+    threshold: float,
+    hybrid_weight: float,
+) -> None:
+    """Persist RAG settings so every device of one account retrieves the same."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号不存在")
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        marker[_RAG_OPTIONS_KEY] = {
+            "top_k": int(top_k),
+            "threshold": float(threshold),
+            "hybrid_weight": float(hybrid_weight),
+        }
+        _write_account_marker(account, marker)
+
+
+def queue_tts_voice_change(account_name: str, conf_uid: str, voice: str) -> None:
+    """Keep a user-initiated voice change until the next model turn for this role."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        raise AuthenticationFailed("账号不存在")
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        pending = marker.get(_PENDING_TTS_VOICES_KEY)
+        changes = dict(pending) if isinstance(pending, dict) else {}
+        changes[conf_uid] = voice
+        marker[_PENDING_TTS_VOICES_KEY] = changes
+        _write_account_marker(account, marker)
+
+
+def consume_tts_voice_change(account_name: str, conf_uid: str) -> str | None:
+    """Atomically claim one notification across tabs and devices."""
+    account = resolve_account_name(account_name)
+    if account is None:
+        return None
+    with _ACCOUNT_LOCK:
+        marker = _read_account_marker(account)
+        pending = marker.get(_PENDING_TTS_VOICES_KEY)
+        if not isinstance(pending, dict):
+            return None
+        voice = pending.get(conf_uid)
+        if not isinstance(voice, str):
+            return None
+        changes = dict(pending)
+        changes.pop(conf_uid, None)
+        marker[_PENDING_TTS_VOICES_KEY] = changes
+        _write_account_marker(account, marker)
+        return voice
+
+
 def ensure_character_profile(account_name: str, conf_uid: str) -> Path:
     """Create missing default files for one account/role without overwriting data."""
     canonical_account = normalize_account_name(account_name)
@@ -231,10 +389,13 @@ def ensure_character_profile(account_name: str, conf_uid: str) -> Path:
     role_dir.mkdir(parents=True, exist_ok=True)
     (role_dir / "full_history").mkdir(exist_ok=True)
     (role_dir / "long_term_memory.md").touch(exist_ok=True)
-    _write_json_if_missing(
-        role_dir / "long_term_relationship.md",
-        LONG_TERM_RELATIONSHIP_DEFAULT,
-    )
+    (role_dir / "long_term_relationship.md").unlink(missing_ok=True)
+    score_path = role_dir / "current_relationship_score.md"
+    try:
+        with score_path.open("x", encoding="utf-8") as score_file:
+            score_file.write(f"{CURRENT_RELATIONSHIP_SCORE_DEFAULT}\n")
+    except FileExistsError:
+        pass
     _write_json_if_missing(
         role_dir / "short_term_relationship.md",
         SHORT_TERM_RELATIONSHIP_DEFAULT,

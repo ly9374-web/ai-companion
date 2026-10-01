@@ -7,7 +7,7 @@ system_config:
   conf_version: 'v1.2.1'
   host: 'localhost'
   port: 12393
-  config_alts_dir: 'characters'
+  config_alts_dir: 'content/characters'
   tool_prompts:
     mcp_prompt: 'mcp_prompt'
     proactive_speak_prompt: 'proactive_speak_prompt'
@@ -33,11 +33,13 @@ character_config:
         long_term_summary_model: 'deepseek-v4-pro'
         long_term_reconcile_model: 'deepseek-v4-pro'
         rolling_summary_model: 'deepseek-v4-pro'
+        persona_profile_model: 'deepseek-v4-flash'
+        persona_profile_source_max_bytes: 50000
         faster_first_response: True
         segment_method: 'pysbd'
         max_history_turns: 8
         use_mcpp: True
-        mcp_enabled_servers: ["ddg-search"]
+        mcp_enabled_servers: ["ddg-search", "MiniMax"]
 
     llm_configs:
       deepseek_llm:

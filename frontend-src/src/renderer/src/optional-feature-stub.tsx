@@ -23,6 +23,19 @@ export function useOptionalFeatureAvailability(): boolean {
   return false;
 }
 
+export function useCamera() {
+  return {
+    available: false,
+    isStreaming: false,
+    stream: null as MediaStream | null,
+    startedAt: null as number | null,
+    startCamera: async (): Promise<void> => {
+      throw new Error('Camera feature is unavailable');
+    },
+    stopCamera: (): void => {},
+  };
+}
+
 export function OptionalFeatureProvider({ children }: { children: ReactNode }) {
   return children;
 }

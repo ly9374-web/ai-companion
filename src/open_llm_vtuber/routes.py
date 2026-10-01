@@ -6,7 +6,7 @@ from uuid import uuid4
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import numpy as np
 from datetime import datetime
-from fastapi import APIRouter, WebSocket, UploadFile, File, Form, Response
+from fastapi import APIRouter, WebSocket, UploadFile, File, Form, Response, Header
 from starlette.responses import FileResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 from loguru import logger
@@ -14,6 +14,7 @@ from .service_context import ServiceContext
 from .websocket_handler import WebSocketHandler
 from .proxy_handler import ProxyHandler
 from .optional_features import (
+    camera_mode_enabled,
     get_optional_feature,
     get_expression_feature_dir,
     get_expression_manifest,
@@ -34,10 +35,16 @@ from .account_manager import (
     authenticate_account,
     create_persistent_session,
     get_persisted_account_features,
+    get_persisted_last_state,
     register_account,
     resolve_authenticated_session,
     revoke_persistent_session,
 )
+from .cloud_history_restore import (
+    account_connection_opened,
+    account_connection_closed,
+)
+from .generated_images import get_generated_image
 
 
 def _account_features(account: str) -> dict[str, bool]:
@@ -126,6 +133,41 @@ def init_account_routes() -> APIRouter:
             return JSONResponse({"error": "退出登录失败"}, status_code=500)
         return Response(status_code=204)
 
+    @router.get("/api/last-state")
+    async def get_last_state(account: str | None = None, session: str | None = None):
+        try:
+            canonical_account = resolve_authenticated_session(account, session)
+            if canonical_account is None:
+                return JSONResponse({"error": "登录已失效"}, status_code=401)
+            state = get_persisted_last_state(canonical_account)
+        except Exception as exc:
+            logger.exception("Failed to read last account state: {}", exc)
+            return JSONResponse({"error": "账号数据读取失败"}, status_code=500)
+        return JSONResponse(
+            state,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
+    @router.get("/api/generated-images/{image_id}")
+    async def read_generated_image(
+        image_id: str,
+        account: str | None = None,
+        authorization: str | None = Header(default=None),
+    ):
+        token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
+        canonical_account = resolve_authenticated_session(account, token)
+        if canonical_account is None:
+            return Response(status_code=401)
+        image = get_generated_image(canonical_account, image_id)
+        if image is None:
+            return Response(status_code=404)
+        path, mime_type = image
+        return FileResponse(
+            path,
+            media_type=mime_type,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
     return router
 
 
@@ -158,11 +200,17 @@ def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
         if account is None:
             await websocket.close(code=4401, reason="Account login required")
             return
-        await websocket.accept()
+        if not account_connection_opened(account):
+            await websocket.close(code=1013, reason="Account history restore in progress")
+            return
         client_uid = str(uuid4())
 
         try:
-            await ws_handler.handle_new_connection(websocket, client_uid, account)
+            await websocket.accept()
+            await ws_handler.handle_new_connection(
+                websocket, client_uid, account,
+                mobile_image_only=websocket.query_params.get("client") == "mobile",
+            )
             await ws_handler.handle_websocket_communication(websocket, client_uid)
         except WebSocketDisconnect:
             await ws_handler.handle_disconnect(client_uid)
@@ -170,6 +218,8 @@ def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
             logger.error(f"Error in WebSocket connection: {e}")
             await ws_handler.handle_disconnect(client_uid)
             raise
+        finally:
+            account_connection_closed(account)
 
     return router
 
@@ -345,7 +395,9 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
         )
 
     @router.get("/optional-features/expression/files/{relative_path:path}")
-    async def get_optional_expression_file(relative_path: str, dir: str | None = None):
+    async def get_optional_expression_file(
+        relative_path: str, dir: str | None = None, mobile: bool = False
+    ):
         feature_dir = get_expression_feature_dir(dir)
         manifest = get_expression_manifest(dir)
         if manifest is None:
@@ -360,6 +412,14 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
             or not requested_path.is_file()
         ):
             return Response(status_code=404)
+        if mobile and requested_path.suffix.lower() == ".png":
+            optimized_path = requested_path.with_suffix(".webp")
+            if optimized_path.is_file():
+                return FileResponse(
+                    optimized_path,
+                    media_type="image/webp",
+                    headers={"Cache-Control": "public, max-age=604800"},
+                )
         media_type = (
             "application/javascript"
             if relative_path.endswith(".js")
@@ -469,6 +529,10 @@ def init_webtool_routes(default_context_cache: ServiceContext) -> APIRouter:
                 "characters": valid_characters,
             }
         )
+
+    # These two endpoints only serve the optional /web-tool page.
+    if not camera_mode_enabled():
+        return router
 
     @router.post("/asr")
     async def transcribe_audio(file: UploadFile = File(...)):

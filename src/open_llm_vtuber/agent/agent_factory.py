@@ -84,6 +84,15 @@ class AgentFactory:
                 system_prompt=system_prompt,
                 **rolling_summary_llm_config,
             )
+            persona_profile_llm_config = dict(llm_config)
+            persona_profile_llm_config["model"] = basic_memory_settings.get(
+                "persona_profile_model", "deepseek-v4-flash"
+            )
+            persona_profile_llm = StatelessLLMFactory.create_llm(
+                llm_provider=llm_provider,
+                system_prompt=system_prompt,
+                **persona_profile_llm_config,
+            )
 
             grok_llm = None
             grok_llm_config = dict(llm_configs.get("grok_llm") or {})
@@ -109,6 +118,10 @@ class AgentFactory:
                 summary_llm=summary_llm,
                 reconcile_llm=reconcile_llm,
                 rolling_summary_llm=rolling_summary_llm,
+                persona_profile_llm=persona_profile_llm,
+                persona_profile_source_max_bytes=basic_memory_settings.get(
+                    "persona_profile_source_max_bytes", 50_000
+                ),
                 system=system_prompt,
                 live2d_model=live2d_model,
                 tts_preprocessor_config=tts_preprocessor_config,

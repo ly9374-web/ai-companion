@@ -1,62 +1,60 @@
-# ignore non-default live2d models
-/live2d-models/*
-!/live2d-models/mao_pro
-!/live2d-models/shizuku
-
-# macOS system files
+# Local operating system and editor state
 .DS_Store
+.metadata_never_index
+.idea/
+.vscode/
+.trae/
 
-# Python files
+# Python and Node installation/build state
 __pycache__/
-*.pyc
-lab.py
-.idea
-
-# Virtual environment
+*.py[cod]
 .venv
-.conda
-conda
+.venv/
+.conda/
+conda/
+**/node_modules/
+frontend-src/dist/
+frontend-src/out/
 
-# Sensitive data
+# Private configuration and keys
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
 api_keys.py
-src/open_llm_vtuber/llm/user_credentials.json
-
-# Database files
-memory.db
-memory.db.bk
-
-# Logs
-server.log
-logs/*
-
-# Cache and models
-cache/*
-src/open_llm_vtuber/tts/asset
-src/open_llm_vtuber/tts/config
-src/open_llm_vtuber/asr/models*
-!src/open_llm_vtuber/asr/models/silero_vad.onnx
-asset
-models/*
-!models/piper_voice
-models/piper_voice/*
-
-
-# Legacy and specific directories
-legacy/
-chat_history/
-knowledge_base/
-submodules/MeloTTS
 openapi_assistants.json
 openapi_memgpt.json
-
-# memory log
-mem.json
+src/open_llm_vtuber/llm/user_credentials.json
 conf.yaml.backup
 
-*.exe
+# Personal data and generated runtime state
+chat_history/
+backups/
+logs/
+cache/
+models/
+knowledge_base/
+memory.db*
+mem.json
+server.log
 
+# Local and legacy generated dependencies
+src/open_llm_vtuber/tts/asset/
+src/open_llm_vtuber/tts/config/
+src/open_llm_vtuber/asr/models*/
+!src/open_llm_vtuber/asr/models/silero_vad.onnx
+asset/
+lab.py
+legacy/
+submodules/MeloTTS/
 tmp/
 private/
+.character-generation-*/
+*.exe
 
-.vscode/
+# Keep only the two default Live2D models in Git
+/live2d-models/*
+!/live2d-models/mao_pro/
+!/live2d-models/shizuku/

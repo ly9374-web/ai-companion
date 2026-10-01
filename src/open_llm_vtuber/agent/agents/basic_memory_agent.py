@@ -46,9 +46,90 @@ class BasicMemoryAgent(AgentInterface):
         re.IGNORECASE,
     )
     _WEB_SEARCH_TOOL_NAMES = frozenset(("search", "fetch_content"))
+    _MCP_ALL_TOOLS_PATTERN = re.compile(
+        r"(?:使用|应用|载入|加载|利用|启用|打开|调用|接入)(?:一下|这个)?\s*MCP(?![A-Za-z0-9_])"
+        r"|(?:use|apply|load|enable|activate|invoke|call|turn\s+on)\s+(?:the\s+)?MCP\b",
+        re.IGNORECASE,
+    )
+    _MCP_NEGATED_CLAUSE_PATTERN = re.compile(
+        r"(?:不要|别|不用|无需|不需要|不使用|不启用|不加载|禁止|别再|do\s+not|don't|dont|no\s+need\s+to|without|disable)"
+        r"[^，,。.；;！？!?\n]{0,40}",
+        re.IGNORECASE,
+    )
+    _MCP_IMAGE_ACTION_PATTERN = re.compile(
+        r"生成|制作|创建|创作|设计|绘制|画|做|渲染"
+        r"|generate|create|make|draw|design|render|paint|illustrate|produce",
+        re.IGNORECASE,
+    )
+    _MCP_IMAGE_TARGET_PATTERN = re.compile(
+        r"图片|图像|插画|海报|封面|头像|壁纸|表情包|照片|画面|PNG|JPE?G|WEBP"
+        r"|images?|pictures?|illustrations?|posters?|covers?|avatars?|wallpapers?|memes?|photos?|artworks?",
+        re.IGNORECASE,
+    )
+    _MCP_VIDEO_ACTION_PATTERN = re.compile(
+        r"生成|制作|创建|创作|做|转成|转换成|变成"
+        r"|generate|create|make|produce|turn\s+into|convert\s+(?:it\s+)?to",
+        re.IGNORECASE,
+    )
+    _MCP_VIDEO_TARGET_PATTERN = re.compile(
+        r"视频|动画|短片|影片|影像|视频片段"
+        r"|videos?|animations?|clips?|movies?|films?",
+        re.IGNORECASE,
+    )
+    _MCP_IMAGE_TO_VIDEO_PATTERN = re.compile(
+        r"图生视频|图片转视频|图像转视频|(?:让|把).{0,20}(?:图片|图像|这张图|上一张图).{0,20}(?:动起来|做成视频|变成视频)"
+        r"|基于.{0,12}(?:图片|图像|上一张图).{0,12}(?:生成|制作).{0,8}视频"
+        r"|image\s*[- ]?to\s*[- ]?video|animate\s+(?:this|the|last|previous)\s+(?:image|picture)"
+        r"|make\s+(?:this|the|last|previous)\s+(?:image|picture)\s+move"
+        r"|use\s+(?:this|the|last|previous)\s+(?:image|picture)\s+as\s+(?:the\s+)?first\s+frame",
+        re.IGNORECASE,
+    )
+    _MCP_VIDEO_QUERY_PATTERN = re.compile(
+        r"(?:查询|查看|检查|查一下|看看).{0,20}(?:视频|生成任务).{0,20}(?:进度|状态|结果|完成)"
+        r"|(?:视频|生成任务).{0,20}(?:好了吗|完成了吗|进度|状态|结果)"
+        r"|(?:check|query|show|get).{0,20}(?:video|generation\s+task).{0,20}(?:status|progress|result)"
+        r"|(?:is|has).{0,12}(?:the\s+)?video.{0,12}(?:ready|done|finished|completed)",
+        re.IGNORECASE,
+    )
+    _MCP_TTS_PATTERN = re.compile(
+        r"朗读|念出来|读出来|配音|文字转语音|文本转语音|转成语音|生成语音|生成音频|合成语音"
+        r"|read\s+(?:it\s+)?aloud|text\s*[- ]?to\s*[- ]?speech|TTS\b|voice\s*over|voiceover"
+        r"|generate\s+(?:an?\s+)?audio|synthesi[sz]e\s+speech|turn.{0,20}into\s+(?:speech|audio)",
+        re.IGNORECASE,
+    )
+    _MCP_VOICE_LIST_PATTERN = re.compile(
+        r"(?:有哪些|列出|查看|查询|显示|推荐|选择|选一个).{0,16}(?:声音|音色|嗓音|语音)"
+        r"|(?:声音|音色|嗓音|语音).{0,16}(?:有哪些|列表|可用|选择|推荐)"
+        r"|(?:list|show|find|choose|recommend).{0,16}(?:available\s+)?voices?"
+        r"|(?:available|supported)\s+voices?",
+        re.IGNORECASE,
+    )
+    _MCP_VOICE_CLONE_ACTION_PATTERN = re.compile(
+        r"克隆|复刻|复制|模仿|仿制|clone|copy|imitate|replicate",
+        re.IGNORECASE,
+    )
+    _MCP_VOICE_TARGET_PATTERN = re.compile(
+        r"声音|音色|嗓音|声线|女声|男声|语音|录音|\bvoices?\b|\btimbre\b|\brecording\b",
+        re.IGNORECASE,
+    )
+    _MCP_VOICE_DESIGN_PATTERN = re.compile(
+        r"(?:设计|创造|定制).{0,24}(?:声音|音色|嗓音|声线|女声|男声)"
+        r"|(?:创建|生成|制作).{0,16}(?:新|全新|自定义|独特|专属).{0,8}(?:声音|音色|嗓音|声线|女声|男声)"
+        r"|(?:design|craft|customi[sz]e).{0,24}\bvoices?\b"
+        r"|(?:create|generate|make).{0,20}(?:new|custom|unique|original).{0,8}\bvoices?\b",
+        re.IGNORECASE,
+    )
+    _MCP_PLAY_AUDIO_ACTION_PATTERN = re.compile(
+        r"播放|放一下|播一下|听听|play|listen\s+to",
+        re.IGNORECASE,
+    )
+    _MCP_AUDIO_TARGET_PATTERN = re.compile(
+        r"音频|语音|录音|声音|歌曲|MP3|WAV|audio|recording|sound|song|MP3|WAV",
+        re.IGNORECASE,
+    )
+    _MAX_TOOL_ROUNDS = 8
     _WEB_SEARCH_RESULT_MAX_CHARS = 1500
     _CONTEXT_INJECTION_KEYS = (
-        "long_term_relationship_context",
         "short_term_relationship_context",
     )
 
@@ -61,6 +142,8 @@ class BasicMemoryAgent(AgentInterface):
         summary_llm: Optional[StatelessLLMInterface] = None,
         reconcile_llm: Optional[StatelessLLMInterface] = None,
         rolling_summary_llm: Optional[StatelessLLMInterface] = None,
+        persona_profile_llm: Optional[StatelessLLMInterface] = None,
+        persona_profile_source_max_bytes: int = 50_000,
         tts_preprocessor_config: TTSPreprocessorConfig = None,
         faster_first_response: bool = True,
         segment_method: str = "pysbd",
@@ -81,6 +164,7 @@ class BasicMemoryAgent(AgentInterface):
         self._segment_method = segment_method
         self.set_max_history_turns(max_history_turns)
         self._use_mcpp = use_mcpp
+        self.mobile_image_only = False
         self.interrupt_method = interrupt_method
         self._tool_prompts = tool_prompts or {}
         self._interrupt_handled = False
@@ -112,6 +196,8 @@ class BasicMemoryAgent(AgentInterface):
         self._summary_llm = summary_llm or llm
         self._reconcile_llm = reconcile_llm or self._summary_llm
         self._rolling_summary_llm = rolling_summary_llm or self._summary_llm
+        self._persona_profile_llm = persona_profile_llm or self._summary_llm
+        self._persona_profile_source_max_bytes = persona_profile_source_max_bytes
         self.set_system(system if system else self._system)
 
         if self._use_mcpp and not all(
@@ -149,6 +235,29 @@ class BasicMemoryAgent(AgentInterface):
         self._grok_enabled = enabled
         self._set_llm(self._grok_llm if enabled else self._deepseek_llm)
         logger.info("Interactive chat model switched to {}", "Grok" if enabled else "DeepSeek")
+
+    def refresh_mcp_tools(
+        self,
+        tool_manager: Any = None,
+        tool_executor: Any = None,
+        mcp_prompt_string: str | None = None,
+    ) -> None:
+        """Swap MCP components after runtime tool re-discovery (e.g. browser API key)."""
+        if tool_manager is not None:
+            self._tool_manager = tool_manager
+        if tool_executor is not None:
+            self._tool_executor = tool_executor
+        if mcp_prompt_string is not None:
+            self._mcp_prompt_string = mcp_prompt_string
+        if self._tool_manager:
+            self._formatted_tools_openai = self._tool_manager.get_formatted_tools(
+                "OpenAI"
+            )
+        else:
+            self._formatted_tools_openai = []
+        logger.info(
+            f"Agent MCP tools refreshed - OpenAI: {len(self._formatted_tools_openai)}"
+        )
 
     def set_deepseek_model(self, model: str) -> None:
         """Switch the interactive DeepSeek chat model (e.g. pro/flash) at runtime."""
@@ -473,6 +582,144 @@ class BasicMemoryAgent(AgentInterface):
                 return query
         return ""
 
+    @staticmethod
+    def _raw_user_text(input_data: BatchInput) -> str:
+        """Return only this turn's user-authored text for deterministic routing."""
+        return "\n".join(
+            text_data.content
+            for text_data in input_data.texts
+            if text_data.source == TextSource.INPUT
+        )
+
+    @classmethod
+    def _matches_action_target(
+        cls,
+        text: str,
+        action_pattern: re.Pattern,
+        target_pattern: re.Pattern,
+    ) -> bool:
+        """Match an intent when action and target both occur in the turn."""
+        return bool(
+            action_pattern.search(text)
+            and target_pattern.search(text)
+        )
+
+    def _select_mcp_tools_for_turn(
+        self, input_data: BatchInput
+    ) -> List[Dict[str, Any]]:
+        """Expose only MCP tools explicitly suggested by the raw user request."""
+        text = self._raw_user_text(input_data)
+        if not text:
+            return []
+        # Remove short negated clauses before matching, so "不要图片，改成视频"
+        # disables only the first request and still allows the second one.
+        text = self._MCP_NEGATED_CLAUSE_PATTERN.sub("", text)
+        if not text.strip():
+            return []
+
+        available_tools = list(self._formatted_tools_openai or [])
+        available_names = {
+            tool.get("function", {}).get("name")
+            for tool in available_tools
+            if tool.get("function", {}).get("name")
+        }
+
+        if self.mobile_image_only:
+            image_requested = self._matches_action_target(
+                text, self._MCP_IMAGE_ACTION_PATTERN, self._MCP_IMAGE_TARGET_PATTERN
+            ) and not self._MCP_IMAGE_TO_VIDEO_PATTERN.search(text)
+            return [
+                tool for tool in available_tools
+                if image_requested
+                and tool.get("function", {}).get("name") == "text_to_image"
+            ]
+
+        all_tools_requested = bool(self._MCP_ALL_TOOLS_PATTERN.search(text))
+        if all_tools_requested:
+            logger.info(
+                "MCP route selected all available tools: {}",
+                sorted(available_names),
+            )
+            return available_tools
+
+        selected_names = set()
+
+        image_to_video_requested = bool(self._MCP_IMAGE_TO_VIDEO_PATTERN.search(text))
+        if not image_to_video_requested and self._matches_action_target(
+            text,
+            self._MCP_IMAGE_ACTION_PATTERN,
+            self._MCP_IMAGE_TARGET_PATTERN,
+        ):
+            selected_names.add("text_to_image")
+
+        video_generation_requested = self._matches_action_target(
+            text,
+            self._MCP_VIDEO_ACTION_PATTERN,
+            self._MCP_VIDEO_TARGET_PATTERN,
+        )
+        if image_to_video_requested or video_generation_requested:
+            selected_names.update(("generate_video", "query_video_generation"))
+        elif self._MCP_VIDEO_QUERY_PATTERN.search(text):
+            selected_names.add("query_video_generation")
+
+        if self._MCP_TTS_PATTERN.search(text):
+            selected_names.add("text_to_audio")
+
+        if self._MCP_VOICE_LIST_PATTERN.search(text):
+            selected_names.add("list_voices")
+
+        if self._matches_action_target(
+            text,
+            self._MCP_VOICE_CLONE_ACTION_PATTERN,
+            self._MCP_VOICE_TARGET_PATTERN,
+        ):
+            selected_names.add("voice_clone")
+
+        if self._MCP_VOICE_DESIGN_PATTERN.search(text):
+            selected_names.add("voice_design")
+
+        if self._matches_action_target(
+            text,
+            self._MCP_PLAY_AUDIO_ACTION_PATTERN,
+            self._MCP_AUDIO_TARGET_PATTERN,
+        ):
+            selected_names.add("play_audio")
+
+        routed_tools = [
+            tool
+            for tool in available_tools
+            if tool.get("function", {}).get("name") in selected_names
+        ]
+        logger.info(
+            "MCP route selected tools: {}",
+            [tool.get("function", {}).get("name") for tool in routed_tools],
+        )
+        return routed_tools
+
+    def _build_mcp_prompt_for_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> str:
+        """Build the prompt-mode fallback using only this turn's routed tools."""
+        if not tools or not self._tool_manager:
+            return ""
+
+        servers_info: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for tool in tools:
+            tool_name = tool.get("function", {}).get("name")
+            if not tool_name:
+                continue
+            tool_info = self._tool_manager.get_tool(tool_name)
+            if not tool_info or not tool_info.related_server:
+                continue
+            server_tools = servers_info.setdefault(tool_info.related_server, {})
+            server_tools[tool_name] = {
+                "description": tool_info.description,
+                "parameters": tool_info.input_schema.get("properties", {}),
+                "required": tool_info.input_schema.get("required", []),
+            }
+
+        return prompt_builder.build_mcp_prompt(servers_info) if servers_info else ""
+
     def _get_web_search_tools(self) -> List[Dict[str, Any]]:
         """Return only DuckDuckGo search and webpage-fetch tools."""
         return [
@@ -491,7 +738,6 @@ class BasicMemoryAgent(AgentInterface):
         user_content = []
         text_prompt = self._to_text_prompt(input_data)
         long_term_memory_context = ""
-        long_term_relationship_context = ""
         short_term_relationship_context = ""
         tts_preference_change_context = ""
         rolling_summary_context = ""
@@ -500,11 +746,9 @@ class BasicMemoryAgent(AgentInterface):
             frontend_activity_context = input_data.metadata.get(
                 "frontend_activity_context", ""
             )
+            time_context_suffix = input_data.metadata.get("time_context_suffix", "")
             long_term_memory_context = input_data.metadata.get(
                 "long_term_memory_context", ""
-            )
-            long_term_relationship_context = input_data.metadata.get(
-                "long_term_relationship_context", ""
             )
             short_term_relationship_context = input_data.metadata.get(
                 "short_term_relationship_context", ""
@@ -515,6 +759,8 @@ class BasicMemoryAgent(AgentInterface):
             rolling_summary_context = input_data.metadata.get(
                 "rolling_summary_context", ""
             )
+        else:
+            time_context_suffix = ""
         debug_mode = bool(
             input_data.metadata and input_data.metadata.get("debug_mode")
         )
@@ -522,7 +768,6 @@ class BasicMemoryAgent(AgentInterface):
         # RAG memory is request-scoped. Relationship snapshots retain their
         # existing history behavior, while retrieved memory never enters it.
         context_injections = {
-            "long_term_relationship_context": long_term_relationship_context,
             "short_term_relationship_context": short_term_relationship_context,
         }
         active_context_injections = {
@@ -538,17 +783,40 @@ class BasicMemoryAgent(AgentInterface):
             include_debug=debug_mode,
         )
 
+        # The time line belongs to this request only; _add_message keeps
+        # text_prompt without it for later model turns.
         request_text = prompt_builder.build_user_request(
-            text_prompt=text_prompt,
+            text_prompt=prompt_builder.join_prompt_lines(
+                (text_prompt, time_context_suffix)
+            ),
             frontend_activity_context=frontend_activity_context,
             tts_preference_change_context=tts_preference_change_context,
             rolling_summary_context=rolling_summary_context,
             long_term_memory_context=long_term_memory_context,
-            long_term_relationship_context=long_term_relationship_context,
             short_term_relationship_context=short_term_relationship_context,
             has_images=bool(input_data.images),
             web_search_context=web_search_context,
         )
+
+        capture_prompt = (
+            input_data.metadata.get("mobile_prompt_log_capture")
+            if input_data.metadata else None
+        )
+        if callable(capture_prompt):
+            try:
+                capture_prompt({
+                    "request_text": request_text,
+                    "text_prompt": text_prompt,
+                    "frontend_activity_context": frontend_activity_context,
+                    "tts_preference_change_context": tts_preference_change_context,
+                    "rolling_summary_context": rolling_summary_context,
+                    "long_term_memory_context": long_term_memory_context,
+                    "short_term_relationship_context": short_term_relationship_context,
+                    "web_search_context": web_search_context,
+                    "has_images": bool(input_data.images),
+                })
+            except Exception:
+                logger.exception("Failed to capture mobile prompt log")
 
         if request_text:
             user_content.append({"type": "text", "text": request_text})
@@ -677,42 +945,9 @@ class BasicMemoryAgent(AgentInterface):
         raw_output = "".join(chunks).strip()
         return raw_output
 
-    async def summarize_long_term_relationship(
-        self,
-        long_term_memory_contents: List[str],
-        existing_relationship_file: str,
-        short_term_relationship_file: str,
-    ) -> str:
-        """Use DeepSeek Pro to rewrite the current character's relationship JSON."""
-        system_prompt = prompt_builder.load_summary_prompt(
-            "long_term_relationship"
-        )
-
-        summary_input = prompt_builder.build_long_term_relationship_summary_input(
-            long_term_memory_contents,
-            existing_relationship_file,
-            short_term_relationship_file,
-        )
-        messages = [
-            {
-                "role": "user",
-                "content": summary_input,
-            }
-        ]
-
-        chunks: List[str] = []
-        async for event in self._summary_llm.chat_completion(messages, system_prompt):
-            if isinstance(event, str):
-                chunks.append(event)
-            elif isinstance(event, dict) and event.get("type") == "text_delta":
-                chunks.append(event.get("text", ""))
-        raw_output = "".join(chunks).strip()
-        return raw_output
-
     async def summarize_short_term_relationship(
         self,
         recent_turns: List[Dict[str, str]],
-        long_term_relationship_file: str,
         existing_short_term_relationship_file: str,
         browser_time: str = "",
     ) -> str:
@@ -723,7 +958,6 @@ class BasicMemoryAgent(AgentInterface):
 
         summary_input = prompt_builder.build_short_term_relationship_summary_input(
             recent_turns,
-            long_term_relationship_file,
             existing_short_term_relationship_file,
             browser_time,
         )
@@ -742,6 +976,27 @@ class BasicMemoryAgent(AgentInterface):
                 chunks.append(event.get("text", ""))
         raw_output = "".join(chunks).strip()
         return raw_output
+
+    async def score_current_relationship(
+        self,
+        recent_turns: List[Dict[str, str]],
+    ) -> str:
+        """Rate exactly one five-turn batch using the summary model."""
+        system_prompt = prompt_builder.load_summary_prompt(
+            "current_relationship_score"
+        )
+        summary_input = prompt_builder.build_current_relationship_score_input(
+            recent_turns
+        )
+        chunks: List[str] = []
+        async for event in self._summary_llm.chat_completion(
+            [{"role": "user", "content": summary_input}], system_prompt
+        ):
+            if isinstance(event, str):
+                chunks.append(event)
+            elif isinstance(event, dict) and event.get("type") == "text_delta":
+                chunks.append(event.get("text", ""))
+        return "".join(chunks).strip()
 
     async def generate_persona_profile_section(
         self,
@@ -762,7 +1017,7 @@ class BasicMemoryAgent(AgentInterface):
         system_prompt = prompt_builder.load_summary_prompt(prompt_name)
         messages = [{"role": "user", "content": user_prompt}]
         chunks: List[str] = []
-        async for event in self._summary_llm.chat_completion(
+        async for event in self._persona_profile_llm.chat_completion(
             messages, system_prompt
         ):
             if isinstance(event, str):
@@ -778,6 +1033,7 @@ class BasicMemoryAgent(AgentInterface):
         self,
         initial_messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
+        mcp_prompt_string: str,
         turn_id: int,
         llm: StatelessLLMInterface,
         debug_mode: bool = False,
@@ -787,12 +1043,19 @@ class BasicMemoryAgent(AgentInterface):
         current_turn_text = ""
         pending_tool_calls: Union[List[ToolCallObject], List[Dict[str, Any]]] = []
         current_system_prompt = self._system
+        tool_rounds = 0
+        tools = list(tools) if tools else None
+        allowed_tool_names = {
+            tool.get("function", {}).get("name")
+            for tool in (tools or [])
+            if tool.get("function", {}).get("name")
+        }
 
         while True:
             if self.prompt_mode_flag:
-                if self._mcp_prompt_string:
+                if mcp_prompt_string:
                     current_system_prompt = prompt_builder.join_prompt_sections(
-                        [self._system, self._mcp_prompt_string]
+                        [self._system, mcp_prompt_string]
                     )
                 else:
                     logger.warning("Prompt mode active but mcp_prompt_string is empty!")
@@ -895,6 +1158,7 @@ class BasicMemoryAgent(AgentInterface):
                     tool_executor_iterator = self._tool_executor.execute_tools(
                         tool_calls=parsed_tools,
                         caller_mode="Prompt",
+                        allowed_tool_names=allowed_tool_names,
                     )
                     try:
                         while True:
@@ -934,6 +1198,23 @@ class BasicMemoryAgent(AgentInterface):
                         current_turn_text, "assistant", debug_mode=debug_mode
                     )
 
+                # 工具轮次上限：防止模型陷入无限工具调用（付费 API 安全阀）
+                if tool_rounds >= self._MAX_TOOL_ROUNDS:
+                    logger.warning(
+                        "Tool interaction round limit reached; forcing text-only reply."
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": prompt_builder.load_runtime_prompt(
+                                "tool_round_limit"
+                            ),
+                        }
+                    )
+                    tools = None
+                    continue
+
+                tool_rounds += 1
                 tool_results_for_llm = []
                 if not self._tool_executor:
                     logger.error(
@@ -947,6 +1228,7 @@ class BasicMemoryAgent(AgentInterface):
                 tool_executor_iterator = self._tool_executor.execute_tools(
                     tool_calls=pending_tool_calls,
                     caller_mode="OpenAI",
+                    allowed_tool_names=allowed_tool_names,
                 )
                 try:
                     while True:
@@ -1003,6 +1285,7 @@ class BasicMemoryAgent(AgentInterface):
             web_search_context = ""
             if (
                 self._use_mcpp
+                and not self.mobile_image_only
                 and self._tool_executor
                 and self._web_search_requested(input_data)
             ):
@@ -1070,6 +1353,27 @@ class BasicMemoryAgent(AgentInterface):
             messages = self._to_messages(
                 input_data, web_search_context=web_search_context
             )
+
+            # MCP 保持连接，但每轮只向模型暴露原始用户输入命中的工具。
+            routed_tools = self._select_mcp_tools_for_turn(input_data)
+            if (
+                self._use_mcpp
+                and self._tool_manager
+                and self._tool_executor
+                and routed_tools
+            ):
+                routed_mcp_prompt = self._build_mcp_prompt_for_tools(routed_tools)
+                async for output in self._openai_tool_interaction_loop(
+                    initial_messages=messages,
+                    tools=routed_tools,
+                    mcp_prompt_string=routed_mcp_prompt,
+                    turn_id=turn_id,
+                    llm=active_llm,
+                    debug_mode=debug_mode,
+                ):
+                    yield output
+                return
+
             token_stream = active_llm.chat_completion(messages, self._system)
             complete_response = ""
             async for event in token_stream:

@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.types import Tool
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import stdio_client, get_default_environment
 
 from .server_registry import ServerRegistry
 
@@ -56,8 +56,14 @@ class MCPClient:
 
         timeout = server.timeout if server.timeout else DEFAULT_TIMEOUT
 
+        # Merge configured env over the default environment so the subprocess
+        # keeps PATH/HOME; passing env directly would replace it entirely.
+        spawn_env = None
+        if server.env:
+            spawn_env = {**get_default_environment(), **server.env}
+
         server_params = StdioServerParameters(
-            command=server.command, args=server.args, env=server.env, cwd=server.cwd
+            command=server.command, args=server.args, env=spawn_env, cwd=server.cwd
         )
 
         try:
@@ -79,6 +85,20 @@ class MCPClient:
             raise RuntimeError(
                 f"MCPC: Failed to connect to server '{server_name}'."
             ) from e
+
+    def invalidate_server_session(self, server_name: str) -> None:
+        """Drop a cached server session and tool list.
+
+        The next list_tools/call_tool will re-spawn the server process, picking
+        up updated registry env (e.g. a refreshed MiniMax API key). Used when
+        runtime credentials change mid-session.
+        """
+        session = self.active_sessions.pop(server_name, None)
+        self._list_tools_cache.pop(server_name, None)
+        if session is not None:
+            logger.info(
+                f"MCPC: Invalidated active session for server '{server_name}'."
+            )
 
     async def list_tools(self, server_name: str) -> List[Tool]:
         """List all available tools on the specified server."""

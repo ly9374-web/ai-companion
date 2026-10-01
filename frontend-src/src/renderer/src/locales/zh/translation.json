@@ -71,9 +71,16 @@
       "maxHistoryTurns": "上下文历史轮数",
       "maxHistoryTurnsHelp": "每次请求模型时带入的已完成用户-AI对话轮数，当前消息会另外加入。范围为1-100，默认为8。",
       "debugMode": "调试",
-      "debugModeHelp": "开启后，聊天和滚动摘要仍会正常保存、触发并插入，但不会调用长期记忆、长期关系和短期关系总结模型；期间的内容也不会在关闭后补写入这三类总结。",
+      "debugModeHelp": "开启后，聊天和滚动摘要仍会正常保存、触发并插入，但不会调用长期记忆、短期关系总结和当前关系评分模型；期间的内容也不会在关闭后补写入这些记录。",
       "rollingSummary": "滚动摘要",
-      "personaProfile": "侧写"
+      "personaProfile": "侧写",
+      "cloudRestoreButton": "从云端恢复聊天和记忆",
+      "cloudRestoreHelp": "使用这台 Mac 的 SSH 密钥拉取当前账号的云端数据。恢复前会完整备份本地数据。",
+      "cloudRestoreConfirm": "确定用云端 {{account}} 的聊天和记忆覆盖这台 Mac 上的同名账号吗？本地数据会先备份。",
+      "cloudRestoreLoginRequired": "请先登录本地账号。",
+      "cloudRestoreWorking": "正在下载并核对云端数据…",
+      "cloudRestoreDone": "已恢复 {{count}} 个文件。原本地数据备份在：{{backup}}",
+      "cloudRestoreFailed": "恢复失败，本地数据未覆盖：{{reason}}"
     },
     "tts": {
       "backgroundImage": "背景图片",
@@ -98,11 +105,14 @@
       "grok": "Grok Key",
       "grokPlaceholder": "输入 xAI Grok Key",
       "grokEnabled": "使用 Grok 聊天",
-      "grokEnabledHelp": "开启后仅普通模型聊天切换为 Grok；长期记忆、长期关系、短期关系和滚动摘要仍使用 DeepSeek。刷新或重新进入页面后自动关闭。",
+      "grokEnabledHelp": "开启后仅普通模型聊天切换为 Grok；长期记忆、短期关系、当前关系评分和滚动摘要仍使用 DeepSeek。刷新或重新进入页面后自动关闭。",
       "qwen": "Qwen Key",
       "qwenPlaceholder": "输入 Qwen Key",
       "replicate": "Replicate Key",
-      "replicatePlaceholder": "输入 Replicate Key"
+      "replicatePlaceholder": "输入 Replicate Key",
+      "minimax": "MiniMax Key",
+      "minimaxPlaceholder": "输入当前账号的 MiniMax Key",
+      "minimaxHelp": "保存后同步到当前账号的云端配置；手机仅使用生图。留空且未修改此项时，会保留云端原有 Key。"
     },
     "asr": {
       "autoStopMic": "AI开始说话时自动关闭麦克风",
@@ -111,6 +121,7 @@
       "autoStartMicOnConvEndDesc": "AI说话结束时自动重新开启麦克风，实现无缝对话",
       "autoStartMicOn": "AI被打断时自动开启麦克风",
       "autoStartMicOnDesc": "当您打断AI时自动重新开启麦克风，保持连续交互",
+      "autoGenerateAudioOnMic": "开启麦克风时自动开启生成语音",
       "positiveSpeechThreshold": "语音识别阈值",
       "positiveSpeechThresholdDesc": "检测语音所需的最低置信度(1-100)，数值越高越能减少误检测",
       "negativeSpeechThreshold": "负面语音阈值",
@@ -135,6 +146,15 @@
     "typeYourMessage": "输入您的消息...",
     "undoLastMessage": "撤回上一条消息"
   },
+  "profilerMedia": {
+    "title": "开启侧写所需功能",
+    "description": "开始侧写前需要开启摄像头和生成语音。当前未开启：{{devices}}。",
+    "camera": "摄像头",
+    "generateAudio": "生成语音",
+    "confirm": "确认并开启",
+    "starting": "正在开启…",
+    "startFailed": "未能开启摄像头，请检查浏览器权限后重试。"
+  },
   "sidebar": {
     "live": "直播",
     "noMessages": "暂无消息。开始对话吧！"
@@ -154,6 +174,7 @@
     "undoMessageSuccess": "已撤回上一条消息",
     "undoMessageEmpty": "没有可撤回的消息",
     "settingsSaved": "设置已保存",
+    "settingsSaveFailed": "设置未保存，请检查连接后重试",
     "manualSummaryRunning": "正在总结长期记忆和短期关系…",
     "manualSummaryComplete": "总结完成，下一次自然总结已重新计数",
     "manualSummaryEmpty": "暂无可总结内容",

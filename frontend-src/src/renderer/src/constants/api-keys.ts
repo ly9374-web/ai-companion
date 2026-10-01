@@ -2,6 +2,9 @@ export const DEEPSEEK_API_KEY_STORAGE_KEY = 'deepseekApiKey';
 export const GROK_API_KEY_STORAGE_KEY = 'grokApiKey';
 export const QWEN_API_KEY_STORAGE_KEY = 'qwenApiKey';
 export const REPLICATE_API_KEY_STORAGE_KEY = 'replicateApiKey';
+export const MINIMAX_API_KEY_STORAGE_KEY = 'minimaxApiKey';
+export const getAccountMinimaxStorageKey = (account: string): string =>
+  `${MINIMAX_API_KEY_STORAGE_KEY}:${encodeURIComponent(account)}`;
 export const DEEPSEEK_MODEL_STORAGE_KEY = 'deepseekModel';
 
 export const DEEPSEEK_MODEL_PRO = 'deepseek-v4-pro';
@@ -29,11 +32,12 @@ export function getStoredDeepseekModel(): string {
   return value === DEEPSEEK_MODEL_FLASH ? value : DEEPSEEK_MODEL_PRO;
 }
 
-export function getStoredApiKeys(): {
+export function getStoredApiKeys(account?: string | null): {
   deepseekApiKey: string;
   grokApiKey: string;
   qwenApiKey: string;
   replicateApiKey: string;
+  minimaxApiKey: string;
   deepseekModel: string;
 } {
   return {
@@ -41,6 +45,7 @@ export function getStoredApiKeys(): {
     grokApiKey: getStoredString(GROK_API_KEY_STORAGE_KEY),
     qwenApiKey: getStoredString(QWEN_API_KEY_STORAGE_KEY),
     replicateApiKey: getStoredString(REPLICATE_API_KEY_STORAGE_KEY),
+    minimaxApiKey: account ? getStoredString(getAccountMinimaxStorageKey(account)) : '',
     deepseekModel: getStoredDeepseekModel(),
   };
 }

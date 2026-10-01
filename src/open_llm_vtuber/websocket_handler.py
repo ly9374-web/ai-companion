@@ -2,15 +2,24 @@ from typing import Dict, List, Optional, Callable, TypedDict
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 import json
+import re
+from datetime import datetime
 import numpy as np
 from loguru import logger
 
 from .service_context import ServiceContext
+from .mobile_prompt_logs import LOG_CATEGORIES, read_prompts
+from .generated_images import list_history_images
+from .account_manager import (
+    get_persisted_rag_options,
+    get_persisted_minimax_api_key,
+    update_persisted_last_state,
+    update_persisted_rag_options,
+)
 from .message_handler import message_handler
 from .human_profile_manager import HumanProfileManager
 from prompts import prompt_builder
 from .chat_history_manager import (
-    create_new_history,
     extract_normal_turns,
     get_history,
     delete_history,
@@ -25,11 +34,15 @@ from .config_manager.utils import scan_config_alts_directory, scan_bg_directory
 from .config_manager.tts import QWEN_TTS_VOICES
 from .optional_features import (
     collect_optional_analysis_data,
-    get_optional_new_history_messages,
     optional_account_can_access_character,
     run_optional_character_switch_action,
 )
-from .profiler_session import ProfilerAnalysisManager, is_profiler_character
+from .conversations.history_session import open_new_history
+from .profiler_session import (
+    PROFILER_INTERIM_ROUNDS,
+    ProfilerAnalysisManager,
+    is_profiler_character,
+)
 from .conversations.conversation_handler import (
     handle_conversation_trigger,
     handle_individual_interrupt,
@@ -49,6 +62,7 @@ class WSMessage(TypedDict, total=False):
     display_text: Optional[dict]
     voice: Optional[str]
     instruction: Optional[str]
+    instruction_preset: Optional[str]
     notify_ai: Optional[bool]
     sync_ai_preferences: Optional[bool]
     browser_time: Optional[str]
@@ -57,12 +71,15 @@ class WSMessage(TypedDict, total=False):
     top_k: Optional[int]
     threshold: Optional[float]
     hybrid_weight: Optional[float]
+    request_id: Optional[str]
     deepseek_api_key: Optional[str]
     grok_api_key: Optional[str]
     grok_enabled: Optional[bool]
     qwen_api_key: Optional[str]
     optional_contexts: Optional[dict]
     content: Optional[str]
+    round: Optional[int]
+    categories: Optional[List[str]]
 
 
 class WebSocketHandler:
@@ -73,7 +90,7 @@ class WebSocketHandler:
         self.client_contexts: Dict[str, ServiceContext] = {}
         self.current_conversation_tasks: Dict[str, Optional[asyncio.Task]] = {}
         self.persona_profile_tasks: Dict[tuple[str, str], asyncio.Task] = {}
-        self.profiler_analysis_tasks: Dict[tuple[str, str], asyncio.Task] = {}
+        self.profiler_analysis_tasks: Dict[tuple, asyncio.Task] = {}
         self.default_context_cache = default_context_cache
         self.received_data_buffers: Dict[str, np.ndarray] = {}
 
@@ -100,9 +117,12 @@ class WebSocketHandler:
             "set-qwen-tts-options": self._handle_set_qwen_tts_options,
             "set-generate-audio": self._handle_set_generate_audio,
             "set-debug-mode": self._handle_set_debug_mode,
+            "set-mobile-prompt-logging": self._handle_set_mobile_prompt_logging,
+            "fetch-mobile-prompt-logs": self._handle_fetch_mobile_prompt_logs,
             "set-max-history-turns": self._handle_set_max_history_turns,
             "set-rag-options": self._handle_set_rag_options,
             "set-api-keys": self._handle_set_api_keys,
+            "set-minimax-account-key": self._handle_set_minimax_account_key,
             "summarize-pending-memory": self._handle_manual_summary,
             "summarize-rolling-context": self._handle_debug_rolling_summary,
             "generate-persona-profile": self._handle_generate_persona_profile,
@@ -116,7 +136,8 @@ class WebSocketHandler:
         }
 
     async def handle_new_connection(
-        self, websocket: WebSocket, client_uid: str, account_name: str
+        self, websocket: WebSocket, client_uid: str, account_name: str,
+        mobile_image_only: bool = False,
     ) -> None:
         """
         Handle new WebSocket connection setup
@@ -130,7 +151,7 @@ class WebSocketHandler:
         """
         try:
             session_service_context = await self._init_service_context(
-                websocket.send_text, client_uid, account_name
+                websocket.send_text, client_uid, account_name, mobile_image_only
             )
 
             await self._store_client_data(client_uid, session_service_context)
@@ -178,6 +199,34 @@ class WebSocketHandler:
             )
         )
 
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "rag-options-updated",
+                    "top_k": session_service_context.rag_top_k,
+                    "threshold": session_service_context.rag_threshold,
+                    "hybrid_weight": session_service_context.rag_hybrid_weight,
+                    "persisted": bool(
+                        session_service_context.account_name
+                        and get_persisted_rag_options(
+                            session_service_context.account_name
+                        )
+                    ),
+                }
+            )
+        )
+        if session_service_context.mobile_image_only:
+            await websocket.send_text(json.dumps({
+                "type": "minimax-key-status",
+                "configured": bool(get_persisted_minimax_api_key(
+                    session_service_context.account_name
+                )),
+                "available": bool(
+                    session_service_context.tool_manager
+                    and session_service_context.tool_manager.get_tool("text_to_image")
+                ),
+            }))
+
         # Start microphone (disabled: user opens mic manually)
         # await websocket.send_text(json.dumps({"type": "control", "text": "start-mic"}))
 
@@ -186,6 +235,7 @@ class WebSocketHandler:
         send_text: Callable,
         client_uid: str,
         account_name: str | None = None,
+        mobile_image_only: bool = False,
     ) -> ServiceContext:
         """Initialize service context for a new session by cloning the default context"""
         session_service_context = ServiceContext()
@@ -208,6 +258,8 @@ class WebSocketHandler:
             tool_adapter=self.default_context_cache.tool_adapter,
             send_text=send_text,
             client_uid=client_uid,
+            account_name=account_name,
+            mobile_image_only=mobile_image_only,
         )
         if account_name:
             session_service_context.configure_account(account_name)
@@ -383,6 +435,11 @@ class WebSocketHandler:
                     ),
                     build_final_input=prompt_builder.build_persona_profile_final_input,
                     progress=send_status,
+                    source_max_bytes=getattr(
+                        context.agent_engine,
+                        "_persona_profile_source_max_bytes",
+                        50_000,
+                    ),
                 )
                 status = str(result.pop("status", "failed"))
                 await send_status({"status": status, **result})
@@ -415,7 +472,7 @@ class WebSocketHandler:
     async def _handle_profiler_finalize(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
-        """Generate the completed 12-round profiler report with DeepSeek."""
+        """Generate a profiler report after the simulated crisis is resolved."""
         context = self.client_contexts[client_uid]
         history_uid = context.history_uid
         if not is_profiler_character(context.character_config.conf_uid) or not history_uid:
@@ -431,7 +488,19 @@ class WebSocketHandler:
             )
             return
 
-        task_key = (context.history_root.resolve().as_posix(), history_uid)
+        requested_round = data.get("round")
+        interim_round = (
+            requested_round
+            if isinstance(requested_round, int)
+            and requested_round in PROFILER_INTERIM_ROUNDS
+            else None
+        )
+
+        task_key = (
+            context.history_root.resolve().as_posix(),
+            history_uid,
+            interim_round,
+        )
         existing_task = self.profiler_analysis_tasks.get(task_key)
         if existing_task is not None and not existing_task.done():
             await websocket.send_text(
@@ -464,6 +533,8 @@ class WebSocketHandler:
         )
 
         async def send_status(payload: dict) -> None:
+            if interim_round is not None:
+                payload.setdefault("round", interim_round)
             try:
                 await websocket.send_text(
                     json.dumps(
@@ -490,6 +561,7 @@ class WebSocketHandler:
                     generate=lambda user_prompt: generate_section(
                         "profiler_thinslice", user_prompt
                     ),
+                    interim_round=interim_round,
                 )
                 await send_status({"progress": 100, **result})
             except asyncio.CancelledError:
@@ -580,10 +652,6 @@ class WebSocketHandler:
                 for label in cancelled_labels
             )
         )
-        needs_long_relationship = rebuild_all or any(
-            label.startswith("long_term_relationship")
-            for label in cancelled_labels
-        )
 
         conf_uid = context.character_config.conf_uid
         recent_turns = get_recent_normal_turns(
@@ -657,22 +725,6 @@ class WebSocketHandler:
                     recent_turns_override=recent_turns,
                 )
 
-        if needs_long_relationship and recent_turns:
-            summarize_long_relationship = getattr(
-                context.agent_engine,
-                "summarize_long_term_relationship",
-                None,
-            )
-            if summarize_long_relationship is not None:
-                await context.long_term_relationship_manager.replace_pending_update_count(
-                    conf_uid, history_uid, len(recent_turns)
-                )
-                await context.long_term_relationship_manager.summarize_pending_update(
-                    conf_uid=conf_uid,
-                    history_uid=history_uid,
-                    summarize=summarize_long_relationship,
-                )
-
     async def _handle_undo_last_message(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
@@ -738,8 +790,8 @@ class WebSocketHandler:
             await context.short_term_relationship_manager.discard_pending_turn(
                 conf_uid, history_uid, withdrawn_turn_payload
             )
-            await context.long_term_relationship_manager.discard_latest_pending_turn(
-                conf_uid, history_uid
+            await context.current_relationship_score_manager.discard_pending_turn(
+                conf_uid, history_uid, withdrawn_turn_payload
             )
         recent_messages = []
         if not context.isolated_conversation_context:
@@ -834,8 +886,25 @@ class WebSocketHandler:
             )
             if msg["role"] != "system"
         ]
+        if context.mobile_image_only:
+            for message in messages:
+                try:
+                    message["sort_time"] = datetime.fromisoformat(
+                        message["timestamp"]
+                    ).timestamp()
+                except (KeyError, TypeError, ValueError):
+                    pass
         await websocket.send_text(
-            json.dumps({"type": "history-data", "messages": messages})
+            json.dumps({
+                "type": "history-data",
+                "history_uid": history_uid,
+                "messages": messages,
+                "generated_images": list_history_images(
+                    context.account_name,
+                    context.character_config.conf_uid,
+                    history_uid,
+                ) if context.mobile_image_only else [],
+            })
         )
 
     async def _handle_create_history(
@@ -843,47 +912,8 @@ class WebSocketHandler:
     ) -> None:
         """Handle creation of new chat history"""
         context = self.client_contexts[client_uid]
-        history_uid = create_new_history(
-            context.character_config.conf_uid,
-            context.history_root,
-        )
+        history_uid, current_messages = open_new_history(context)
         if history_uid:
-            context.history_uid = history_uid
-            context.english_mode = False
-            for initial_message in get_optional_new_history_messages(context):
-                store_message(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=history_uid,
-                    role=str(initial_message.get("role", "ai")),
-                    content=str(initial_message.get("content", "")),
-                    name=str(initial_message.get("name", "")),
-                    avatar=str(initial_message.get("avatar", "")),
-                    history_root=context.history_root,
-                )
-            current_messages = get_history(
-                context.character_config.conf_uid,
-                history_uid,
-                context.history_root,
-            )
-            recent_messages = []
-            if not context.isolated_conversation_context:
-                recent_messages = get_recent_normal_history_messages(
-                    context.character_config.conf_uid,
-                    context.max_history_turns,
-                    context.history_root,
-                    exclude_history_uid=history_uid,
-                )
-            set_memory_from_messages = getattr(
-                context.agent_engine, "set_memory_from_messages", None
-            )
-            if set_memory_from_messages is not None:
-                set_memory_from_messages(recent_messages + current_messages)
-            else:
-                context.agent_engine.set_memory_from_history(
-                    conf_uid=context.character_config.conf_uid,
-                    history_uid=history_uid,
-                    history_root=context.history_root,
-                )
             await websocket.send_text(
                 json.dumps(
                     {
@@ -1023,6 +1053,10 @@ class WebSocketHandler:
                 )
                 return
             await context.handle_config_switch(websocket, config_file_name)
+            if selected_config:
+                update_persisted_last_state(
+                    context.account_name, role_file=config_file_name
+                )
             optional_payload = await run_optional_character_switch_action(context)
             if optional_payload:
                 await websocket.send_text(json.dumps(optional_payload))
@@ -1037,6 +1071,7 @@ class WebSocketHandler:
 
         context = self.client_contexts[client_uid]
         context.set_tts_voice(voice)
+        update_persisted_last_state(context.account_name, voice=voice)
         await websocket.send_text(
             json.dumps({"type": "tts-voice-updated", "voice": voice})
         )
@@ -1047,12 +1082,18 @@ class WebSocketHandler:
         """Update Qwen voice and instruction for one session."""
         voice = data.get("voice")
         instruction = data.get("instruction")
+        instruction_preset = data.get("instruction_preset")
         notify_ai = data.get("notify_ai", False)
         sync_ai_preferences = data.get("sync_ai_preferences", False)
         if not isinstance(voice, str) or voice not in QWEN_TTS_VOICES:
             raise ValueError("Unsupported Qwen-Audio Flash voice")
         if not isinstance(instruction, str) or len(instruction) > 2000:
             raise ValueError("Invalid Qwen TTS instruction")
+        if instruction_preset is not None and (
+            not isinstance(instruction_preset, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,80}", instruction_preset) is None
+        ):
+            raise ValueError("Invalid Qwen TTS instruction preset")
         if not isinstance(notify_ai, bool):
             raise ValueError("Invalid notify-ai setting")
         if not isinstance(sync_ai_preferences, bool):
@@ -1064,6 +1105,17 @@ class WebSocketHandler:
             instruction=instruction,
             notify_ai=notify_ai,
             sync_ai_preferences=sync_ai_preferences,
+        )
+        update_persisted_last_state(
+            context.account_name,
+            voice=voice,
+            # The current desktop client has only one nonempty preset and
+            # sends its instruction text without the preset key.
+            instruction_preset=(
+                instruction_preset
+                if instruction_preset is not None
+                else "none" if not instruction else "instruction1"
+            ),
         )
         await websocket.send_text(
             json.dumps(
@@ -1084,6 +1136,7 @@ class WebSocketHandler:
         grok_api_key = data.get("grok_api_key")
         grok_enabled = data.get("grok_enabled")
         qwen_api_key = data.get("qwen_api_key")
+        minimax_api_key = data.get("minimax_api_key", "")
         deepseek_model = data.get("deepseek_model")
         if not isinstance(deepseek_api_key, str) or len(deepseek_api_key) > 4096:
             raise ValueError("Invalid DeepSeek API key")
@@ -1093,20 +1146,53 @@ class WebSocketHandler:
             raise ValueError("Invalid Grok enabled state")
         if not isinstance(qwen_api_key, str) or len(qwen_api_key) > 4096:
             raise ValueError("Invalid Qwen API key")
+        if not isinstance(minimax_api_key, str) or len(minimax_api_key) > 4096:
+            raise ValueError("Invalid MiniMax API key")
+        if self.client_contexts[client_uid].mobile_image_only:
+            minimax_api_key = ""
         if deepseek_model is not None and (
             not isinstance(deepseek_model, str)
             or deepseek_model not in ("deepseek-v4-pro", "deepseek-v4-flash")
         ):
             raise ValueError("Invalid DeepSeek model")
 
-        self.client_contexts[client_uid].set_runtime_api_keys(
+        await self.client_contexts[client_uid].set_runtime_api_keys(
             deepseek_api_key=deepseek_api_key.strip(),
             grok_api_key=grok_api_key.strip(),
             grok_enabled=grok_enabled,
             qwen_api_key=qwen_api_key.strip(),
+            minimax_api_key=minimax_api_key,
             deepseek_model=deepseek_model,
         )
         await websocket.send_text(json.dumps({"type": "api-keys-updated"}))
+
+    async def _handle_set_minimax_account_key(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        context = self.client_contexts[client_uid]
+        if context.mobile_image_only:
+            raise ValueError("MiniMax key can only be configured on the desktop page")
+        key = data.get("minimax_api_key")
+        if not isinstance(key, str) or len(key) > 4096:
+            raise ValueError("Invalid MiniMax API key")
+        await context.set_minimax_account_key(key.strip())
+        for other_uid, other_context in list(self.client_contexts.items()):
+            if (
+                other_uid != client_uid
+                and other_context.account_name == context.account_name
+                and other_context.mobile_image_only
+            ):
+                await other_context.refresh_minimax_account_key()
+                if other_context.send_text:
+                    await other_context.send_text(json.dumps({
+                        "type": "minimax-key-status",
+                        "configured": bool(key.strip()),
+                        "available": bool(
+                            other_context.tool_manager
+                            and other_context.tool_manager.get_tool("text_to_image")
+                        ),
+                    }))
+        await websocket.send_text(json.dumps({"type": "minimax-account-key-updated"}))
 
     async def _handle_manual_summary(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
@@ -1350,6 +1436,41 @@ class WebSocketHandler:
             json.dumps({"type": "debug-mode-updated", "enabled": enabled})
         )
 
+    async def _handle_set_mobile_prompt_logging(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("Invalid mobile prompt logging setting")
+        context = self.client_contexts[client_uid]
+        context.mobile_prompt_logging = enabled
+        await websocket.send_text(
+            json.dumps({"type": "mobile-prompt-logging-updated", "enabled": enabled})
+        )
+
+    async def _handle_fetch_mobile_prompt_logs(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        categories = data.get("categories")
+        if (
+            not isinstance(categories, list)
+            or any(
+                not isinstance(item, str) or item not in LOG_CATEGORIES
+                for item in categories
+            )
+        ):
+            raise ValueError("Invalid mobile prompt log categories")
+        context = self.client_contexts[client_uid]
+        result = read_prompts(
+            context.account_name,
+            context.character_config.conf_uid,
+            context.history_uid,
+            set(categories),
+        )
+        await websocket.send_text(
+            json.dumps({"type": "mobile-prompt-logs", **result}, ensure_ascii=False)
+        )
+
     async def _handle_fetch_system_prompt(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
@@ -1513,6 +1634,13 @@ class WebSocketHandler:
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
         context = self.client_contexts[client_uid]
+        request_id = data.get("request_id")
+        response_id = {"request_id": request_id} if isinstance(request_id, str) else {}
+        previous_rag = (
+            context.rag_top_k,
+            context.rag_threshold,
+            context.rag_hybrid_weight,
+        )
         try:
             context.set_rag_options(
                 top_k=data.get("top_k", 5),
@@ -1521,9 +1649,32 @@ class WebSocketHandler:
             )
         except (TypeError, ValueError) as exc:
             await websocket.send_text(
-                json.dumps({"type": "error", "message": f"Invalid RAG settings: {exc}"})
+                json.dumps({"type": "error", "message": f"Invalid RAG settings: {exc}", **response_id})
             )
             return
+        if context.account_name:
+            try:
+                update_persisted_rag_options(
+                    context.account_name,
+                    top_k=context.rag_top_k,
+                    threshold=context.rag_threshold,
+                    hybrid_weight=context.rag_hybrid_weight,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist RAG options for account {}",
+                    context.account_name,
+                )
+                (
+                    context.rag_top_k,
+                    context.rag_threshold,
+                    context.rag_hybrid_weight,
+                ) = previous_rag
+                context.refresh_rag_options()
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Failed to save RAG settings", **response_id})
+                )
+                return
         await websocket.send_text(
             json.dumps(
                 {
@@ -1531,6 +1682,7 @@ class WebSocketHandler:
                     "top_k": context.rag_top_k,
                     "threshold": context.rag_threshold,
                     "hybrid_weight": context.rag_hybrid_weight,
+                    **response_id,
                 }
             )
         )

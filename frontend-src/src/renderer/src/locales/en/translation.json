@@ -71,9 +71,16 @@
       "maxHistoryTurns": "Context History Turns",
       "maxHistoryTurnsHelp": "Number of completed user-assistant turns included as context in each model request. The current message is added separately. Range: 1-100; default: 8.",
       "debugMode": "Debug",
-      "debugModeHelp": "When enabled, chats and rolling summaries are still saved, triggered, and injected, but long-term memory, long-term relationship, and short-term relationship summaries are disabled. These conversations will not be added to those three summaries later after debug mode is disabled.",
+      "debugModeHelp": "When enabled, chats and rolling summaries are still saved, triggered, and injected, but long-term memory, short-term relationship summaries, and current relationship scoring are disabled. These conversations will not be added to those records later after debug mode is disabled.",
       "rollingSummary": "Rolling Summary",
-      "personaProfile": "Profile"
+      "personaProfile": "Profile",
+      "cloudRestoreButton": "Restore chats and memory from cloud",
+      "cloudRestoreHelp": "Uses this Mac's SSH key to download the current account's cloud data. Local data is backed up before replacement.",
+      "cloudRestoreConfirm": "Replace this Mac's chats and memory for {{account}} with the cloud copy? The local data will be backed up first.",
+      "cloudRestoreLoginRequired": "Sign in to the local account first.",
+      "cloudRestoreWorking": "Downloading and verifying cloud data…",
+      "cloudRestoreDone": "Restored {{count}} files. Local backup: {{backup}}",
+      "cloudRestoreFailed": "Restore failed. Local data was not replaced: {{reason}}"
     },
     "tts": {
       "backgroundImage": "Background Image",
@@ -98,11 +105,14 @@
       "grok": "Grok Key",
       "grokPlaceholder": "Enter xAI Grok Key",
       "grokEnabled": "Use Grok for Chat",
-      "grokEnabledHelp": "When enabled, only interactive model chat uses Grok. Long-term memory, long-term relationship, short-term relationship, and rolling summaries continue to use DeepSeek. This switch turns off after a page reload or a new page session.",
+      "grokEnabledHelp": "When enabled, only interactive model chat uses Grok. Long-term memory, short-term relationship, current relationship scoring, and rolling summaries continue to use DeepSeek. This switch turns off after a page reload or a new page session.",
       "qwen": "Qwen Key",
       "qwenPlaceholder": "Enter Qwen Key",
       "replicate": "Replicate Key",
-      "replicatePlaceholder": "Enter Replicate Key"
+      "replicatePlaceholder": "Enter Replicate Key",
+      "minimax": "MiniMax Key",
+      "minimaxPlaceholder": "Enter this account's MiniMax Key",
+      "minimaxHelp": "Saved to this account on the server; mobile uses image generation only. Leaving this field untouched keeps the existing server key."
     },
     "asr": {
       "autoStopMic": "Auto Stop Mic When AI Start Speaking",
@@ -111,6 +121,7 @@
       "autoStartMicOnConvEndDesc": "Automatically restarts microphone when AI finishes speaking for seamless conversation",
       "autoStartMicOn": "Auto Start Mic When AI Interrupted",
       "autoStartMicOnDesc": "Automatically restarts microphone when you interrupt AI for continuous interaction",
+      "autoGenerateAudioOnMic": "Auto Enable Voice Generation When Mic Turns On",
       "positiveSpeechThreshold": "Speech Prob Threshold",
       "positiveSpeechThresholdDesc": "Minimum confidence level (1-100) required to detect speech. Higher values reduce false positives",
       "negativeSpeechThreshold": "Negative Speech Threshold",
@@ -135,6 +146,15 @@
     "typeYourMessage": "Type your message...",
     "undoLastMessage": "Undo last message"
   },
+  "profilerMedia": {
+    "title": "Enable requirements for profiling",
+    "description": "Camera and voice generation must be enabled before profiling starts. Not enabled: {{devices}}.",
+    "camera": "camera",
+    "generateAudio": "Generate Voice",
+    "confirm": "Confirm and enable",
+    "starting": "Enabling…",
+    "startFailed": "Camera could not be enabled. Check browser permissions and try again."
+  },
   "sidebar": {
     "live": "Live",
     "noMessages": "No messages yet. Start a conversation!"
@@ -154,6 +174,7 @@
     "undoMessageSuccess": "Last message undone",
     "undoMessageEmpty": "No message to undo",
     "settingsSaved": "Settings saved",
+    "settingsSaveFailed": "Settings could not be saved. Check the connection and try again.",
     "manualSummaryRunning": "Summarizing long-term memory and short-term relationship…",
     "manualSummaryComplete": "Summary complete; the next automatic summary starts from zero",
     "manualSummaryEmpty": "Nothing to summarize yet",

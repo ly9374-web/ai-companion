@@ -3,13 +3,6 @@
   "version": 23,
   "backend_entry": "backend_context.py",
   "backend_required_hooks": [
-    "registration_features",
-    "public_account_features",
-    "account_policy",
-    "account_can_access_character",
-    "process_text_input",
-    "new_history_messages",
-    "after_character_switch",
     "augment_tool_status",
     "build_request_context",
     "collect_analysis_data"

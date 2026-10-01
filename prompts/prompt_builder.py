@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any, Iterable
 
 from . import prompt_loader
@@ -49,6 +51,35 @@ def render_character_system_prompt(
     return join_prompt_sections((persona_prompt, output_rules))
 
 
+def strip_relationship_guidance(system_prompt: str) -> str:
+    """Remove a saved relationship tier while retaining the surrounding persona."""
+    marker = prompt_loader.load_prompt("chat.current_relationship_heading").strip()
+    lines = system_prompt.splitlines()
+    kept: list[str] = []
+    in_guidance = False
+    for line in lines:
+        if line.strip() == marker:
+            in_guidance = True
+            continue
+        if in_guidance and re.match(r"\s*#\S", line):
+            in_guidance = False
+        if not in_guidance:
+            kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def build_current_relationship_guidance(score: float) -> str:
+    """Render the prescribed five-point tier for a persisted 0–100 score."""
+    if not math.isfinite(score) or not 0 <= score <= 100:
+        raise ValueError("Current relationship score must be between 0 and 100")
+    tier = min(95, int(score // 5) * 5)
+    guidance = prompt_loader.load_prompt(
+        f"chat.current_relationship_tiers.tier_{tier}"
+    ).strip()
+    heading = prompt_loader.load_prompt("chat.current_relationship_heading")
+    return join_prompt_sections((heading, guidance))
+
+
 def load_runtime_prompt(name: str, **values: object) -> str:
     key = f"runtime.{name}"
     if values:
@@ -70,7 +101,6 @@ def build_user_request(
     tts_preference_change_context: str = "",
     rolling_summary_context: str = "",
     long_term_memory_context: str = "",
-    long_term_relationship_context: str = "",
     short_term_relationship_context: str = "",
     has_images: bool = False,
     web_search_context: str = "",
@@ -80,7 +110,6 @@ def build_user_request(
 
     contexts = (
         long_term_memory_context,
-        long_term_relationship_context,
         short_term_relationship_context,
     )
     if not any(context for context in contexts):
@@ -92,7 +121,6 @@ def build_user_request(
         rendered = prompt_loader.render_prompt(
             "chat.user_prompt.with_context",
             long_term_memory_context=long_term_memory_context,
-            long_term_relationship_context=long_term_relationship_context,
             short_term_relationship_context=short_term_relationship_context,
             user_input=text_prompt,
         ).strip()
@@ -120,13 +148,6 @@ def build_memory_injection(memories: Iterable[str]) -> str:
     return prompt_loader.render_prompt(
         "chat.contexts.long_term_memory",
         memories=memory_lines,
-    ).strip()
-
-
-def build_long_relationship_injection(relationship_file: str) -> str:
-    return prompt_loader.render_prompt(
-        "chat.contexts.long_term_relationship",
-        relationship_file=relationship_file.rstrip(),
     ).strip()
 
 
@@ -187,28 +208,8 @@ def build_rolling_context_summary_input(
     ).strip()
 
 
-def build_long_term_relationship_summary_input(
-    long_term_memory_contents: list[str],
-    existing_relationship_file: str,
-    short_term_relationship_file: str,
-) -> str:
-    return prompt_loader.render_prompt(
-        "summaries.long_term_relationship.user_prompt",
-        long_term_memory_contents_json=json.dumps(
-            long_term_memory_contents, ensure_ascii=False
-        ),
-        existing_relationship_file_json=json.dumps(
-            existing_relationship_file, ensure_ascii=False
-        ),
-        short_term_relationship_file_json=json.dumps(
-            short_term_relationship_file, ensure_ascii=False
-        ),
-    ).strip()
-
-
 def build_short_term_relationship_summary_input(
     recent_turns: list[dict[str, str]],
-    long_term_relationship_file: str,
     existing_short_term_relationship_file: str,
     browser_time: str = "",
 ) -> str:
@@ -226,12 +227,18 @@ def build_short_term_relationship_summary_input(
             current_time_context, ensure_ascii=False
         ),
         recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
-        long_term_relationship_file_json=json.dumps(
-            long_term_relationship_file, ensure_ascii=False
-        ),
         existing_short_term_relationship_file_json=json.dumps(
             existing_short_term_relationship_file, ensure_ascii=False
         ),
+    ).strip()
+
+
+def build_current_relationship_score_input(
+    recent_turns: list[dict[str, str]],
+) -> str:
+    return prompt_loader.render_prompt(
+        "summaries.current_relationship_score.user_prompt",
+        recent_turns_json=json.dumps(recent_turns, ensure_ascii=False),
     ).strip()
 
 

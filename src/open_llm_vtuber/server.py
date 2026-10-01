@@ -8,6 +8,7 @@ It uses FastAPI for the server and Starlette for static file serving.
 
 import os
 import shutil
+import asyncio
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -20,9 +21,11 @@ from .routes import (
     init_webtool_routes,
     init_proxy_route,
 )
+from .cloud_history_restore import init_local_cloud_restore_routes
+from .generated_images import cleanup_expired_images_loop
 from .service_context import ServiceContext
 from .config_manager.utils import Config
-from .optional_features import get_optional_static_mounts, validate_optional_feature
+from .optional_features import camera_mode_enabled, get_optional_static_mounts, validate_optional_feature
 
 
 # Create a custom StaticFiles class that adds CORS headers
@@ -50,6 +53,17 @@ class CORSStaticFiles(StarletteStaticFiles):
             response.headers["Expires"] = "0"
 
         return response
+
+
+class FrontendStaticFiles(CORSStaticFiles):
+    """Select the camera page only for an explicit camera launch."""
+
+    async def get_response(self, path: str, scope):
+        if path == "camera.html" and not camera_mode_enabled():
+            return Response(status_code=404)
+        if camera_mode_enabled() and path in {"", ".", "index.html"}:
+            path = "camera.html"
+        return await super().get_response(path, scope)
 
 
 class AvatarStaticFiles(CORSStaticFiles):
@@ -88,6 +102,21 @@ class WebSocketServer:
         # exposed. A missing directory is valid; a partial installation is not.
         validate_optional_feature()
         self.app = FastAPI(title="Open-LLM-VTuber Server")  # Added title for clarity
+        image_cleanup_task: asyncio.Task | None = None
+
+        @self.app.on_event("startup")
+        async def start_image_cleanup() -> None:
+            nonlocal image_cleanup_task
+            image_cleanup_task = asyncio.create_task(cleanup_expired_images_loop())
+
+        @self.app.on_event("shutdown")
+        async def stop_image_cleanup() -> None:
+            if image_cleanup_task is not None:
+                image_cleanup_task.cancel()
+                try:
+                    await image_cleanup_task
+                except asyncio.CancelledError:
+                    pass
         self.config = config
         self.default_context_cache = (
             default_context_cache or ServiceContext()
@@ -108,6 +137,7 @@ class WebSocketServer:
         self.app.include_router(
             init_account_routes(),
         )
+        self.app.include_router(init_local_cloud_restore_routes())
         self.app.include_router(
             init_client_ws_route(default_context_cache=self.default_context_cache),
         )
@@ -143,12 +173,12 @@ class WebSocketServer:
         )
         self.app.mount(
             "/bg",
-            CORSStaticFiles(directory="backgrounds"),
+            CORSStaticFiles(directory="content/backgrounds"),
             name="backgrounds",
         )
         self.app.mount(
             "/avatars",
-            AvatarStaticFiles(directory="avatars"),
+            AvatarStaticFiles(directory="content/avatars"),
             name="avatars",
         )
 
@@ -165,7 +195,7 @@ class WebSocketServer:
         # Mount main frontend last (as catch-all)
         self.app.mount(
             "/",
-            CORSStaticFiles(directory="frontend", html=True),
+            FrontendStaticFiles(directory="frontend", html=True),
             name="frontend",
         )
 

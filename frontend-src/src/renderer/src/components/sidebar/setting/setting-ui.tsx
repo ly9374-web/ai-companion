@@ -37,11 +37,12 @@ interface SettingUIProps {
 function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
   const { t } = useTranslation();
   const optionalFeatureAvailable = useOptionalFeatureAvailability();
-  const [saveHandlers, setSaveHandlers] = useState<(() => void)[]>([]);
+  const [saveHandlers, setSaveHandlers] = useState<(() => void | Promise<void>)[]>([]);
   const [cancelHandlers, setCancelHandlers] = useState<(() => void)[]>([]);
   const [activeTab, setActiveTab] = useState('general');
+  const [saving, setSaving] = useState(false);
 
-  const handleSaveCallback = useCallback((handler: () => void) => {
+  const handleSaveCallback = useCallback((handler: () => void | Promise<void>) => {
     setSaveHandlers((prev) => [...prev, handler]);
     return (): void => {
       setSaveHandlers((prev) => prev.filter((h) => h !== handler));
@@ -55,15 +56,27 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
     };
   }, []);
 
-  const handleSave = useCallback((): void => {
-    saveHandlers.forEach((handler) => handler());
-    toaster.create({
-      title: t('notification.settingsSaved'),
-      type: 'success',
-      duration: 2000,
-    });
-    onClose();
-  }, [saveHandlers, onClose, t]);
+  const handleSave = useCallback(async (): Promise<void> => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await Promise.all(saveHandlers.map((handler) => handler()));
+      toaster.create({
+        title: t('notification.settingsSaved'),
+        type: 'success',
+        duration: 2000,
+      });
+      onClose();
+    } catch (_error) {
+      toaster.create({
+        title: t('notification.settingsSaveFailed'),
+        type: 'error',
+        duration: 4000,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [saveHandlers, onClose, saving, t]);
 
   const handleCancel = useCallback((): void => {
     cancelHandlers.forEach((handler) => handler());
@@ -173,7 +186,7 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
           <Button colorPalette="red" onClick={handleCancel}>
             {t('common.cancel')}
           </Button>
-          <Button colorPalette="blue" onClick={handleSave}>
+          <Button colorPalette="blue" onClick={handleSave} loading={saving}>
             {t('common.save')}
           </Button>
         </DrawerFooter>

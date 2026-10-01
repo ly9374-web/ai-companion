@@ -10,6 +10,11 @@ import { useSendAudio } from '@/hooks/utils/use-send-audio';
 import { AiStateContext, AiState } from './ai-state-context';
 import { useLocalStorage } from '@/hooks/utils/use-local-storage';
 import { toaster } from '@/components/ui/toaster';
+import { wsService } from '@/services/websocket-service';
+import {
+  getGeneralRuntimeSettings,
+  setGeneralRuntimeSettings,
+} from '@/constants/general-runtime-settings';
 
 /**
  * VAD settings configuration interface
@@ -44,7 +49,7 @@ interface VADState {
   setAutoStopMic: (value: boolean) => void;
 
   /** Start microphone and VAD */
-  startMic: () => Promise<void>;
+  startMic: () => Promise<boolean>;
 
   /** Stop microphone and VAD */
   stopMic: () => void;
@@ -78,6 +83,12 @@ interface VADState {
 
   /** Set auto start microphone when conversation ends state */
   setAutoStartMicOnConvEnd: (value: boolean) => void;
+
+  /** Auto enable "generate audio" when the microphone is turned on */
+  autoGenerateAudioOnMic: boolean;
+
+  /** Set auto generate audio on mic state */
+  setAutoGenerateAudioOnMic: (value: boolean) => void;
 }
 
 /**
@@ -111,6 +122,7 @@ const DEFAULT_VAD_STATE = {
   autoStopMic: false,
   autoStartMicOn: false,
   autoStartMicOnConvEnd: false,
+  autoGenerateAudioOnMic: true,
 };
 
 const VAD_PRE_SPEECH_PAD_FRAMES = 20;
@@ -139,6 +151,9 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
   const manualSpeechPreviousAiStateRef = useRef<AiState>('idle');
   const recentAudioFramesRef = useRef<Float32Array[]>([]);
   const activeSpeechFramesRef = useRef<Float32Array[]>([]);
+  // AI 说话期间麦克风拾取的“语音”大概率是扬声器回声：这一段自动语音
+  // 既不打断 AI，也不会被当作用户输入发送（手动空格说话不受影响）。
+  const suppressedAutoSegmentRef = useRef(false);
 
   // Persistent state management
   const [micOn, setMicOn] = useState(false);
@@ -172,6 +187,11 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     DEFAULT_VAD_STATE.autoStartMicOnConvEnd,
   );
   const autoStartMicOnConvEndRef = useRef(false);
+  const [autoGenerateAudioOnMic, setAutoGenerateAudioOnMicState] = useLocalStorage(
+    'autoGenerateAudioOnMic',
+    DEFAULT_VAD_STATE.autoGenerateAudioOnMic,
+  );
+  const autoGenerateAudioOnMicRef = useRef(autoGenerateAudioOnMic);
 
   // Force update mechanism for ref updates
   const [, forceUpdate] = useReducer((x) => x + 1, 0);
@@ -243,6 +263,7 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     // Save current AI state but DON'T change to listening yet
     previousAiStateRef.current = aiStateRef.current;
     isProcessingRef.current = true;
+    suppressedAutoSegmentRef.current = aiStateRef.current === 'thinking-speaking';
     // Don't change state here - wait for onSpeechRealStart
   }, []);
 
@@ -254,6 +275,11 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     if (manualSpeechActiveRef.current) {
       setAiStateRef.current('listening');
       aiStateRef.current = 'listening';
+      return;
+    }
+
+    if (suppressedAutoSegmentRef.current) {
+      console.log('AI is speaking; ignoring mic segment (likely speaker echo)');
       return;
     }
 
@@ -307,6 +333,15 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    if (suppressedAutoSegmentRef.current) {
+      console.log('Dropping suppressed mic segment captured while AI was speaking');
+      suppressedAutoSegmentRef.current = false;
+      setPreviousTriggeredProbability(0);
+      isProcessingRef.current = false;
+      activeSpeechFramesRef.current = [];
+      return;
+    }
+
     audioTaskQueue.clearQueue();
 
     if (autoStopMicRef.current) {
@@ -335,6 +370,11 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     if (manualSpeechActiveRef.current) {
       setAiStateRef.current('listening');
       aiStateRef.current = 'listening';
+      return;
+    }
+
+    if (suppressedAutoSegmentRef.current) {
+      suppressedAutoSegmentRef.current = false;
       return;
     }
 
@@ -383,10 +423,24 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
+   * 开启“生成语音”：更新运行时设置并在 WebSocket 打开时同步到后端。
+   * 只在麦克风从关到开的瞬间调用；关闭麦克风不会反向关闭它。
+   */
+  const autoEnableGenerateAudio = useCallback(() => {
+    const generalSettings = getGeneralRuntimeSettings();
+    if (generalSettings.generateAudio) return;
+    setGeneralRuntimeSettings({ ...generalSettings, generateAudio: true });
+    if (wsService.getCurrentState() === 'OPEN') {
+      wsService.sendMessage({ type: 'set-generate-audio', enabled: true });
+    }
+  }, []);
+
+  /**
    * Start microphone and VAD processing
    */
   const startMic = useCallback(async () => {
     try {
+      const wasMicOn = micOnRef.current;
       if (!vadRef.current) {
         console.log('Initializing VAD');
         await initVAD();
@@ -396,6 +450,10 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       }
       micOnRef.current = true;
       setMicOn(true);
+      if (!wasMicOn && autoGenerateAudioOnMicRef.current) {
+        autoEnableGenerateAudio();
+      }
+      return true;
     } catch (error) {
       console.error('Failed to start VAD:', error);
       toaster.create({
@@ -403,8 +461,9 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
         type: 'error',
         duration: 2000,
       });
+      return false;
     }
-  }, [t]);
+  }, [autoEnableGenerateAudio, t]);
 
   /**
    * Stop microphone and VAD processing
@@ -415,6 +474,7 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     manualSpeechFramesRef.current = [];
     recentAudioFramesRef.current = [];
     activeSpeechFramesRef.current = [];
+    suppressedAutoSegmentRef.current = false;
     if (vadRef.current) {
       vadRef.current.pause();
       vadRef.current.destroy();
@@ -434,6 +494,7 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     manualSpeechFramesRef.current = [];
     recentAudioFramesRef.current = [];
     activeSpeechFramesRef.current = [];
+    suppressedAutoSegmentRef.current = false;
     isProcessingRef.current = false;
     if (vadRef.current) {
       vadRef.current.pause();
@@ -538,6 +599,12 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
     forceUpdate();
   }, []);
 
+  const setAutoGenerateAudioOnMic = useCallback((value: boolean) => {
+    autoGenerateAudioOnMicRef.current = value;
+    setAutoGenerateAudioOnMicState(value);
+    forceUpdate();
+  }, []);
+
   // Memoized context value
   const contextValue = useMemo(
     () => ({
@@ -557,6 +624,8 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       setAutoStartMicOn,
       autoStartMicOnConvEnd: autoStartMicOnConvEndRef.current,
       setAutoStartMicOnConvEnd,
+      autoGenerateAudioOnMic: autoGenerateAudioOnMicRef.current,
+      setAutoGenerateAudioOnMic,
     }),
     [
       micOn,
@@ -566,6 +635,7 @@ export function VADProvider({ children }: { children: React.ReactNode }) {
       finishManualSpeech,
       settings,
       updateSettings,
+      autoGenerateAudioOnMic,
     ],
   );
 

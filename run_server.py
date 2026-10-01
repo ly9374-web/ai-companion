@@ -1,16 +1,19 @@
 import os
 import sys
+import time
 import atexit
 import asyncio
 import argparse
 import socket
 from pathlib import Path
 import tomllib
+import numpy as np
 import uvicorn
 from loguru import logger
 
 from src.open_llm_vtuber.server import WebSocketServer
 from src.open_llm_vtuber.config_manager import Config, read_yaml, validate_config
+from src.open_llm_vtuber.memory_rag import memory_rag_store
 
 os.environ["HF_HOME"] = str(Path(__file__).parent / "models")
 os.environ["MODELSCOPE_CACHE"] = str(Path(__file__).parent / "models")
@@ -79,6 +82,31 @@ def parse_args():
     return parser.parse_args()
 
 
+def warm_up_context(server: WebSocketServer) -> None:
+    """Pay one-time model start-up costs before the server accepts clients.
+
+    The first ASR transcription and the first vector-RAG retrieval each load
+    heavy native/ML state on their first call. Doing it here keeps the user's
+    first utterance from waiting on that cold start.
+    """
+    context = server.default_context_cache
+    asr_engine = getattr(context, "asr_engine", None)
+    if asr_engine is not None:
+        started = time.perf_counter()
+        silence = np.zeros(asr_engine.SAMPLE_RATE, dtype=np.float32)
+        asr_engine.transcribe_np(silence)
+        logger.info(
+            "ASR warm-up finished in {:.1f}s", time.perf_counter() - started
+        )
+
+    try:
+        started = time.perf_counter()
+        memory_rag_store.warm_up()
+        logger.info("RAG warm-up finished in {:.1f}s", time.perf_counter() - started)
+    except Exception as e:
+        logger.warning(f"RAG warm-up skipped: {e}")
+
+
 @logger.catch
 def run(console_log_level: str, reload: bool = False):
     init_logger(console_log_level)
@@ -109,6 +137,9 @@ def run(console_log_level: str, reload: bool = False):
     except Exception as e:
         logger.error(f"Failed to initialize server context: {e}")
         sys.exit(1)
+
+    logger.info("Warming up models...")
+    warm_up_context(server)
 
     if reload:
         logger.info("Hot-reload enabled — server will restart on code changes")

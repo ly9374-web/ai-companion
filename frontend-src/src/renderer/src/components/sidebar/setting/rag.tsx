@@ -6,7 +6,7 @@ import { settingStyles } from './setting-styles';
 import { useRagSettings } from '@/hooks/sidebar/setting/use-rag-settings';
 
 interface RagProps {
-  onSave?: (callback: () => void) => () => void;
+  onSave?: (callback: () => Promise<void>) => () => void;
   onCancel?: (callback: () => void) => () => void;
 }
 

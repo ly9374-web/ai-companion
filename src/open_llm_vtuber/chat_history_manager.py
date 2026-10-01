@@ -5,7 +5,7 @@ import uuid
 import tempfile
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, List, TypedDict, Optional
 from loguru import logger
 
@@ -53,6 +53,7 @@ def _write_history_atomic(filepath: str, history_data: list[dict]) -> None:
 class HistoryMessage(TypedDict):
     role: Literal["human", "ai", "system"]
     timestamp: str
+    timestamp_utc: Optional[str]
     content: str
     # Optional display information for the message
     name: Optional[str]
@@ -258,10 +259,12 @@ def store_message(
             except Exception:
                 logger.error(f"Failed to load history file: {filepath}")
 
-        now_str = datetime.now().isoformat(timespec="seconds")
+        now = datetime.now().astimezone()
+        now_str = now.replace(tzinfo=None).isoformat(timespec="seconds")
         new_item = {
             "role": role,
             "timestamp": now_str,
+            "timestamp_utc": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
             "content": content,
         }
         if name is not None:
@@ -283,6 +286,44 @@ def store_message(
         history_data.append(new_item)
         _write_history_atomic(filepath, history_data)
     logger.debug(f"Successfully stored {role} message")
+
+
+def get_latest_user_message_time(
+    conf_uid: str,
+    history_root: str | Path = "chat_history",
+    history_uid: str | None = None,
+) -> datetime | None:
+    """Read the latest saved normal user time without adding it to model context."""
+    history_dir = get_character_history_dir(conf_uid, history_root) / FULL_HISTORY_DIR_NAME
+    if not history_dir.is_dir():
+        return None
+    paths = (
+        [Path(_get_safe_history_path(conf_uid, history_uid, history_root))]
+        if history_uid else history_dir.glob("*.json")
+    )
+    latest: datetime | None = None
+    now = datetime.now(timezone.utc)
+    for path in paths:
+        if not path.is_file() or path.name == "conversation_state.json":
+            continue
+        for message in get_history(conf_uid, path.stem, history_root):
+            if (
+                not isinstance(message, dict)
+                or message.get("role") != "human"
+                or message.get("debug_mode")
+                or not str(message.get("content", "")).strip()
+            ):
+                continue
+            raw_time = message.get("timestamp_utc") or message.get("timestamp")
+            if not isinstance(raw_time, str):
+                continue
+            try:
+                parsed = datetime.fromisoformat(raw_time).astimezone(timezone.utc)
+            except ValueError:
+                continue
+            if parsed <= now and (latest is None or parsed > latest):
+                latest = parsed
+    return latest
 
 
 def undo_latest_chat_message(

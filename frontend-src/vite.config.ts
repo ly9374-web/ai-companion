@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react-swc';
 import fs from 'fs';
 
 const projectRoot = path.resolve(__dirname, '..');
-const optionalFeatureSources = fs.readdirSync(projectRoot, { withFileTypes: true })
+const buildCamera = process.env.AI_COMPANION_CAMERA_BUILD === '1';
+const optionalFeatureSources = (buildCamera ? fs.readdirSync(projectRoot, { withFileTypes: true }) : [])
   .filter((entry) => entry.isDirectory())
   .map((entry) => path.join(projectRoot, entry.name))
   .filter((directory) => fs.existsSync(path.join(directory, 'optional-feature.json')));
@@ -96,9 +97,12 @@ const createConfig = async (outDir: string) => ({
     emptyOutDir: true,
     assetsDir: "assets",
     rollupOptions: {
-      input: {
-        main: path.join(__dirname, "src/renderer/index.html"),
-      },
+      input: buildCamera
+        ? { main: path.join(__dirname, "src/renderer/index.html") }
+        : {
+            main: path.join(__dirname, "src/renderer/index.html"),
+            mobile: path.join(__dirname, "src/renderer/m.html"),
+          },
     },
   },
   ssr: {
@@ -108,7 +112,7 @@ const createConfig = async (outDir: string) => ({
 
 export default defineConfig(async ({ mode }) => {
   if (mode === 'web') {
-    return createConfig('dist/web');
+    return createConfig(buildCamera ? 'dist/camera' : 'dist/web');
   }
   return createConfig('dist/renderer');
 });

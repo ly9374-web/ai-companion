@@ -2,6 +2,7 @@ import { Stack, createListCollection } from '@chakra-ui/react';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useWebSocket } from '@/context/websocket-context';
+import { useAccount } from '@/context/account-context';
 import {
   DEEPSEEK_API_KEY_STORAGE_KEY,
   DEEPSEEK_MODEL_OPTIONS,
@@ -9,6 +10,7 @@ import {
   getStoredApiKeys,
   GROK_API_KEY_STORAGE_KEY,
   isGrokEnabledForPageSession,
+  getAccountMinimaxStorageKey,
   QWEN_API_KEY_STORAGE_KEY,
   REPLICATE_API_KEY_STORAGE_KEY,
   setGrokEnabledForPageSession,
@@ -28,6 +30,7 @@ interface ApiKeySettings {
   grokEnabled: boolean;
   qwenApiKey: string;
   replicateApiKey: string;
+  minimaxApiKey: string;
 }
 
 const deepseekModels = createListCollection({
@@ -40,11 +43,13 @@ const deepseekModels = createListCollection({
 function Key({ onSave, onCancel }: KeyProps): JSX.Element {
   const { t } = useTranslation();
   const { sendMessage } = useWebSocket();
+  const { account } = useAccount();
   const initialSettings = {
-    ...getStoredApiKeys(),
+    ...getStoredApiKeys(account),
     grokEnabled: isGrokEnabledForPageSession(),
   };
   const [settings, setSettings] = useState<ApiKeySettings>(initialSettings);
+  const [minimaxEdited, setMinimaxEdited] = useState(false);
   const [originalSettings, setOriginalSettings] = useState<ApiKeySettings>(
     initialSettings,
   );
@@ -70,6 +75,12 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
       REPLICATE_API_KEY_STORAGE_KEY,
       JSON.stringify(settings.replicateApiKey.trim()),
     );
+    if (account && minimaxEdited) {
+      localStorage.setItem(
+        getAccountMinimaxStorageKey(account),
+        JSON.stringify(settings.minimaxApiKey.trim()),
+      );
+    }
     setGrokEnabledForPageSession(settings.grokEnabled);
     setOriginalSettings(settings);
     sendMessage({
@@ -79,11 +90,20 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
       grok_api_key: settings.grokApiKey.trim(),
       grok_enabled: settings.grokEnabled,
       qwen_api_key: settings.qwenApiKey.trim(),
+      minimax_api_key: minimaxEdited ? settings.minimaxApiKey.trim() : '',
     });
-  }, [sendMessage, settings]);
+    if (account && minimaxEdited) {
+      sendMessage({
+        type: 'set-minimax-account-key',
+        minimax_api_key: settings.minimaxApiKey.trim(),
+      });
+    }
+    setMinimaxEdited(false);
+  }, [account, minimaxEdited, sendMessage, settings]);
 
   const handleCancel = useCallback((): void => {
     setSettings(originalSettings);
+    setMinimaxEdited(false);
   }, [originalSettings]);
 
   useEffect(() => {
@@ -152,6 +172,17 @@ function Key({ onSave, onCancel }: KeyProps): JSX.Element {
           replicateApiKey,
         }))}
         placeholder={t('settings.key.replicatePlaceholder')}
+        type="password"
+      />
+      <InputField
+        label={t('settings.key.minimax')}
+        value={settings.minimaxApiKey}
+        onChange={(minimaxApiKey) => {
+          setMinimaxEdited(true);
+          setSettings((current) => ({ ...current, minimaxApiKey }));
+        }}
+        placeholder={t('settings.key.minimaxPlaceholder')}
+        help={t('settings.key.minimaxHelp')}
         type="password"
       />
     </Stack>

@@ -3,6 +3,19 @@
       "ddg-search": {
         "command": "uvx",
         "args": ["duckduckgo-mcp-server"]
+      },
+      "MiniMax": {
+        "command": "sh",
+        "args": [
+          "-c",
+          "exec uvx minimax-mcp | grep --line-buffered -v '^Starting Minimax MCP server$'"
+        ],
+        "timeout": 300,
+        "env": {
+          "MINIMAX_API_KEY": "",
+          "MINIMAX_API_HOST": "https://api.minimax.chat",
+          "MINIMAX_API_RESOURCE_MODE": "url"
+        }
       }
     }
 }

@@ -180,6 +180,10 @@ class TTSTaskManager:
             file_name_no_ext=f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}",
         )
 
+    async def wait_until_payloads_sent(self) -> None:
+        """Wait until every generated payload has been sent in sequence."""
+        await self._payload_queue.join()
+
     def clear(self) -> None:
         """Clear all pending tasks and reset state"""
         self.task_list.clear()

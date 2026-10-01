@@ -31,4 +31,16 @@ rsync -a --delete \
     "$frontend_build_dir/" \
     "$frontend_deploy_dir/"
 
-echo "[OK] Frontend rebuilt from frontend-src and deployed to frontend."
+if [ -f "$project_dir/摄像头/optional-feature.json" ]; then
+    echo "[INFO] Building the optional camera page..."
+    AI_COMPANION_CAMERA_BUILD=1 npm --prefix "$frontend_source_dir" run build:web
+    camera_build_dir="$frontend_source_dir/dist/camera"
+    if [ ! -f "$camera_build_dir/index.html" ]; then
+        echo "[ERROR] Camera build did not produce index.html"
+        exit 1
+    fi
+    cp "$camera_build_dir/index.html" "$frontend_deploy_dir/camera.html"
+    rsync -a "$camera_build_dir/assets/" "$frontend_deploy_dir/assets/"
+fi
+
+echo "[OK] Desktop, mobile, and optional camera pages deployed to frontend/."

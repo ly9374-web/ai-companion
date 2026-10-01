@@ -7,16 +7,6 @@ echo "  DeepSeek + Qwen TTS + Sherpa-ONNX ASR"
 echo "================================================"
 echo ""
 
-# Check Python version
-PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Python 3 not found. Please install Python 3.11+ first."
-    echo "  macOS: brew install python@3.12"
-    exit 1
-fi
-
-echo "[INFO] System Python version: $PYTHON_VERSION"
-
 # Check for uv package manager
 if ! command -v uv &> /dev/null; then
     echo "[INFO] uv not found, installing uv..."
@@ -32,19 +22,24 @@ fi
 
 echo "[INFO] uv version: $(uv --version)"
 
-# Use the external virtual environment (kept outside iCloud Desktop)
-export UV_PROJECT_ENVIRONMENT="/Users/jason/.local/share/project-venvs/ai-companion/.venv"
+# Keep the environment out of a Desktop/iCloud checkout on every Mac.
+export UV_PROJECT_ENVIRONMENT="$HOME/.local/share/project-venvs/ai-companion/.venv"
 if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
     echo "[INFO] External environment missing, recreating from uv.lock..."
+    uv python install 3.11
     uv venv --python 3.11 "$UV_PROJECT_ENVIRONMENT"
 fi
 echo "[INFO] Syncing dependencies (frozen, per uv.lock)..."
 uv sync --frozen --directory "$(pwd)"
 
-# Fix sherpa-onnx onnxruntime linking (if needed)
-SHERPA_LIB_DIR="$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/sherpa_onnx/lib"
-ONNX_DYLIB=$(ls "$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/onnxruntime/capi/"libonnxruntime.*.dylib 2>/dev/null | head -1)
-if [ -n "$ONNX_DYLIB" ]; then
+"$UV_PROJECT_ENVIRONMENT/bin/python" scripts/prepare_models.py
+
+# Fix the macOS sherpa-onnx / onnxruntime link if needed.
+if [ "$(uname -s)" = "Darwin" ]; then
+    SHERPA_LIB_DIR="$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/sherpa_onnx/lib"
+    ONNX_DYLIB=$(ls "$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/onnxruntime/capi/"libonnxruntime.*.dylib 2>/dev/null | head -1)
+fi
+if [ -n "${ONNX_DYLIB:-}" ]; then
     TARGET_LINK="$SHERPA_LIB_DIR/$(basename "$ONNX_DYLIB")"
     # Always fix the link: remove broken symlink or outdated file, then recreate
     if [ -L "$TARGET_LINK" ] || [ -f "$TARGET_LINK" ]; then
@@ -88,8 +83,10 @@ trap cleanup_browser_waiter EXIT INT TERM
   while true; do
     if curl --noproxy '*' --silent --fail --output /dev/null \
       --connect-timeout 1 --max-time 2 http://127.0.0.1:12393/; then
-      echo "[INFO] Server is ready, opening browser..."
-      open http://localhost:12393
+      if command -v open >/dev/null 2>&1; then
+        echo "[INFO] Server is ready, opening browser..."
+        open http://localhost:12393
+      fi
       exit 0
     fi
     sleep 1

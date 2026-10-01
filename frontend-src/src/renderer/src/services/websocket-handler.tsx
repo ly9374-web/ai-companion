@@ -24,7 +24,6 @@ import {
   isValidQwenTtsVoice,
 } from '@/constants/qwen-tts-voices';
 import { getStoredMaxHistoryTurns } from '@/constants/max-history-turns';
-import { getStoredRagSettings } from '@/constants/rag-settings';
 import { optionalFeature } from '@optional-feature';
 import { optionalExpressionFeature } from '@/services/optional-expression-feature';
 import {
@@ -68,6 +67,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
   const { startMic, stopMic, autoStartMicOnConvEnd } = useVAD();
   const autoStartMicOnConvEndRef = useRef(autoStartMicOnConvEnd);
   const profilerFinalPendingRef = useRef(false);
+  const profilerFinalRoundRef = useRef<number | null>(null);
 
   const setWsUrl = useCallback((url: string) => {
     setCurrentWsUrl(url);
@@ -114,9 +114,12 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           optionalFeature.onConversationEnd();
           if (profilerFinalPendingRef.current) {
             profilerFinalPendingRef.current = false;
+            const finalizeRound = profilerFinalRoundRef.current;
+            profilerFinalRoundRef.current = null;
             setAiState('loading');
             wsService.sendMessage({
               type: 'profiler-finalize',
+              ...(finalizeRound !== null ? { round: finalizeRound } : {}),
               optional_contexts: optionalFeature.consumeAssistantResponse(),
             });
             resolve();
@@ -234,15 +237,6 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           type: 'set-max-history-turns',
           max_history_turns: getStoredMaxHistoryTurns(),
         });
-        {
-          const ragSettings = getStoredRagSettings();
-          wsService.sendMessage({
-            type: 'set-rag-options',
-            top_k: ragSettings.topK,
-            threshold: ragSettings.threshold,
-            hybrid_weight: ragSettings.hybridWeight,
-          });
-        }
         break;
       case 'tts-voice-updated':
       case 'qwen-tts-options-updated':
@@ -267,6 +261,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             displayText: message.display_text || null,
             expressions: message.actions?.expressions || null,
             emotion: message.emotion || null,
+            speechSegments: message.speech_segments || [],
           });
         }
         break;
@@ -282,6 +277,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         break;
       case 'new-history-created':
         profilerFinalPendingRef.current = false;
+        profilerFinalRoundRef.current = null;
         setAiState('idle');
         setSubtitleText(t('notification.newConversation'));
         // No need to open mic here
@@ -308,15 +304,23 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           });
         }
         break;
-      case 'profiler-final-round-ready':
+      case 'profiler-analysis-ready':
         profilerFinalPendingRef.current = true;
+        profilerFinalRoundRef.current = typeof message.round === 'number' ? message.round : null;
         break;
       case 'profiler-analysis-status': {
         const status = message.status;
+        const interimRound = typeof message.round === 'number' ? message.round : null;
         if (status === 'accepted' || status === 'running') {
           setAiState('loading');
           const toastOptions = {
-            title: status === 'accepted' ? '12轮侧写已完成，正在整理分析材料' : 'DeepSeek 正在生成心理侧写',
+            title: status === 'accepted'
+              ? (interimRound !== null
+                ? `已进入第${interimRound}轮，正在整理中期分析材料`
+                : '危机已经解决，正在整理分析材料')
+              : (interimRound !== null
+                ? `DeepSeek 正在生成第${interimRound}轮中期心理侧写`
+                : 'DeepSeek 正在生成心理侧写'),
             description: typeof message.progress === 'number'
               ? `进度 ${message.progress}%`
               : undefined,
@@ -332,7 +336,9 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         setAiState('idle');
         if (status === 'success') {
           const toastOptions = {
-            title: '心理侧写报告已生成',
+            title: interimRound !== null
+              ? `第${interimRound}轮中期心理侧写报告已生成`
+              : '心理侧写报告已生成',
             description: message.path,
             type: 'success' as const,
             duration: 6000,
@@ -345,6 +351,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
           window.dispatchEvent(new CustomEvent('profiler-analysis-complete', { detail: {
             content: message.content || '',
             path: message.path || '',
+            round: interimRound,
           }}));
           break;
         }
@@ -642,7 +649,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
         }}));
         break;
       case 'backend-synth-complete':
-        setBackendSynthComplete(true);
+        setBackendSynthComplete(message.request_id || null);
         break;
       case 'conversation-chain-end':
         if (!audioTaskQueue.hasTask()) {
@@ -670,6 +677,7 @@ function WebSocketHandler({ children }: { children: React.ReactNode }) {
             status: message.status as ('running' | 'completed' | 'error'),
             content: message.content || '',
             timestamp: message.timestamp || new Date().toISOString(),
+            media_urls: message.media_urls,
           });
         } else {
           console.warn('Received incomplete tool_call_status message:', message);

@@ -1,5 +1,11 @@
-export const DEFAULT_WS_URL = 'ws://127.0.0.1:12393/client-ws';
-export const DEFAULT_BASE_URL = 'http://127.0.0.1:12393';
+const browserOrigin = typeof window !== 'undefined'
+  && (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+  ? window.location.origin : null;
+
+export const DEFAULT_WS_URL = browserOrigin
+  ? `${browserOrigin.replace(/^http/, 'ws')}/client-ws`
+  : 'ws://127.0.0.1:12393/client-ws';
+export const DEFAULT_BASE_URL = browserOrigin || 'http://127.0.0.1:12393';
 
 const readStoredString = (key: string, fallback: string): string => {
   try {

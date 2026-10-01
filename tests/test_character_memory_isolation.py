@@ -15,8 +15,8 @@ from open_llm_vtuber.long_term_memory_manager import (
     LongTermMemory,
     LongTermMemoryManager,
 )
-from open_llm_vtuber.long_term_relationship_manager import (
-    LongTermRelationshipManager,
+from open_llm_vtuber.current_relationship_score_manager import (
+    CurrentRelationshipScoreManager,
 )
 from open_llm_vtuber.short_term_relationship_manager import (
     ShortTermRelationshipManager,
@@ -84,62 +84,25 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_long_relationship_update_and_injection_are_role_scoped(self):
-        for conf_uid, content in (
-            (ALGERNON, "Algernon 的长期记忆"),
-            (CUIGE, "崔格的长期记忆"),
-        ):
-            role_dir = self.history_root / conf_uid
-            role_dir.mkdir(parents=True)
-            (role_dir / "long_term_memory.md").write_text(
-                content,
-                encoding="utf-8",
-            )
-
-        manager = LongTermRelationshipManager(
-            history_root=self.history_root,
-            update_interval=1,
-            injection_interval=1,
+    async def test_current_relationship_scores_are_role_scoped(self):
+        manager = CurrentRelationshipScoreManager(
+            history_root=self.history_root, update_interval=1
         )
 
-        async def summarize(memory_file, existing_relationship_file):
-            role = "Algernon" if "Algernon" in memory_file else "崔格"
-            return json.dumps(
-                {"long_term_relationship": f"用户与 {role} 的长期关系。"},
-                ensure_ascii=False,
-            )
+        async def positive(_turns):
+            return '{"score":5}'
 
-        module = "open_llm_vtuber.long_term_relationship_manager"
-        with patch(f"{module}.get_metadata", self.fake_get_metadata), patch(
-            f"{module}.update_metadate", self.fake_update_metadata
-        ):
-            self.assertTrue(
-                await manager.record_completed_turn(ALGERNON, "same_history", summarize)
-            )
-            self.assertTrue(
-                await manager.record_completed_turn(CUIGE, "same_history", summarize)
-            )
-            algernon_injection = await manager.consume_injection(
-                ALGERNON, "same_history"
-            )
-            cuige_injection = await manager.consume_injection(CUIGE, "same_history")
-
-        self.assertIn("Algernon", algernon_injection)
-        self.assertNotIn("崔格", algernon_injection)
-        self.assertIn("崔格", cuige_injection)
-        self.assertNotIn("Algernon", cuige_injection)
+        await manager.record_turn(ALGERNON, "same_history", "A 用户", "A 回答")
+        self.assertTrue(
+            await manager.summarize_pending_update(ALGERNON, "same_history", positive)
+        )
+        self.assertGreater(manager.read_score(ALGERNON), 3)
+        self.assertEqual(manager.read_score(CUIGE), 3)
 
     async def test_short_relationship_inputs_and_outputs_are_role_scoped(self):
         for conf_uid, role in ((ALGERNON, "Algernon"), (CUIGE, "崔格")):
             role_dir = self.history_root / conf_uid
             role_dir.mkdir(parents=True)
-            (role_dir / "long_term_relationship.md").write_text(
-                json.dumps(
-                    {"long_term_relationship": f"用户与 {role} 的长期关系。"},
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
             (role_dir / "short_term_relationship.md").write_text(
                 json.dumps(
                     {"short_term_relationship": f"用户与 {role} 的旧短期关系。"},
@@ -154,13 +117,12 @@ class CharacterMemoryIsolationTests(unittest.IsolatedAsyncioTestCase):
             injection_interval=1,
         )
 
-        async def summarize(turns, long_relationship, short_relationship):
+        async def summarize(turns, short_relationship, browser_time):
             self.assertEqual(len(turns), 1)
-            if "Algernon" in long_relationship:
+            if "Algernon" in short_relationship:
                 self.assertIn("Algernon", short_relationship)
                 role = "Algernon"
             else:
-                self.assertIn("崔格", long_relationship)
                 self.assertIn("崔格", short_relationship)
                 role = "崔格"
             return json.dumps(

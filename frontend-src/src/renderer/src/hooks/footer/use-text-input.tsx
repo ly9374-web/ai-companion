@@ -9,6 +9,7 @@ import { optionalFeature, useOptionalMediaCapture } from '@optional-feature';
 import { getMissingChatApiKeyProvider } from '@/constants/api-keys';
 import { toaster } from '@/components/ui/toaster';
 import { useTranslation } from 'react-i18next';
+import { useProfilerMediaGate } from '@/context/profiler-media-gate-context';
 
 interface SendTextMessageOptions {
   optionalPayload?: Record<string, unknown>;
@@ -22,6 +23,7 @@ export function useSendTextMessage() {
   const { appendHumanMessage } = useChatHistory();
   const { stopMic, autoStopMic } = useVAD();
   const { captureAllMedia } = useOptionalMediaCapture();
+  const { ensureReadyForMessage } = useProfilerMediaGate();
 
   const sendTextMessage = useCallback(async (
     displayText: string,
@@ -42,6 +44,7 @@ export function useSendTextMessage() {
       });
       return false;
     }
+    if (!(await ensureReadyForMessage(text))) return false;
     if (aiState === 'thinking-speaking') {
       interrupt();
     }
@@ -68,6 +71,7 @@ export function useSendTextMessage() {
     appendHumanMessage,
     autoStopMic,
     captureAllMedia,
+    ensureReadyForMessage,
     interrupt,
     stopMic,
     t,

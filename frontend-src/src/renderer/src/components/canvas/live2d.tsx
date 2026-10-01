@@ -44,7 +44,6 @@ export const Live2D = memo(
     // Setup hooks
     useIpcHandlers();
     useInterrupt();
-    useAudioTask();
 
     useEffect(() => {
       optionalExpressionFeature.configureInteraction({

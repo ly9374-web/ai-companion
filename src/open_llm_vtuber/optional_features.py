@@ -4,17 +4,25 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from loguru import logger
+from . import account_features
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONTENT_ROOT = PROJECT_ROOT / "content"
 OPTIONAL_FEATURE_DESCRIPTOR = "optional-feature.json"
 DEFAULT_EXPRESSION_DIR = "expression"
+CAMERA_MODE_ENV = "AI_COMPANION_CAMERA"
+
+
+def camera_mode_enabled() -> bool:
+    return os.environ.get(CAMERA_MODE_ENV) == "1"
 
 
 class OptionalFeatureConfigurationError(RuntimeError):
@@ -35,16 +43,16 @@ def _safe_relative_file(feature_dir: Path, value: object, field: str) -> Path:
 
 
 def get_expression_feature_dir(expression_dir: str | None = None) -> Path:
-    """Resolve one character's expression feature folder under PROJECT_ROOT.
+    """Resolve one character's expression folder under content/expressions.
 
     Only a bare directory name is accepted so the resolved path always stays a
-    direct child of the project root. Invalid or empty values fall back to the
+    direct child of the expressions directory. Invalid or empty values fall back to the
     legacy ``expression`` directory and degrade to "unavailable".
     """
     name = (expression_dir or "").strip() or DEFAULT_EXPRESSION_DIR
     if Path(name).name != name or name in (".", ".."):
         name = DEFAULT_EXPRESSION_DIR
-    return PROJECT_ROOT / name
+    return CONTENT_ROOT / "expressions" / name
 
 
 def get_optional_feature() -> tuple[Path, dict[str, Any]] | None:
@@ -53,6 +61,8 @@ def get_optional_feature() -> tuple[Path, dict[str, Any]] | None:
     A present but broken descriptor is an installation error.  Silently treating
     that state as "feature removed" could unexpectedly change account policy.
     """
+    if not camera_mode_enabled():
+        return None
     descriptor_paths = sorted(
         PROJECT_ROOT.glob(f"*/{OPTIONAL_FEATURE_DESCRIPTOR}"),
         key=lambda path: path.as_posix(),
@@ -144,77 +154,36 @@ def _call_optional(name: str, default: Any, *args: Any) -> Any:
 
 
 def get_optional_registration_features(account_name: str) -> dict[str, bool]:
-    result = _call_optional("registration_features", {}, account_name)
-    if not isinstance(result, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in result.items()
-        if isinstance(key, str) and isinstance(value, bool)
-    }
+    return account_features.registration_features(account_name)
 
 
 def get_optional_public_account_features(
     account_name: str,
     persisted_features: dict[str, bool] | None = None,
 ) -> dict[str, bool]:
-    result = _call_optional(
-        "public_account_features",
-        {},
-        account_name,
-        dict(persisted_features or {}),
+    return account_features.public_account_features(
+        account_name, dict(persisted_features or {})
     )
-    if not isinstance(result, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in result.items()
-        if isinstance(key, str) and isinstance(value, bool)
-    }
 
 
 def get_optional_account_policy(account_name: str) -> dict[str, bool]:
-    result = _call_optional("account_policy", {}, account_name)
-    if not isinstance(result, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in result.items()
-        if isinstance(key, str) and isinstance(value, bool)
-    }
+    return account_features.account_policy(account_name)
 
 
 def optional_account_can_access_character(account_name: str, conf_uid: object) -> bool:
-    result = _call_optional(
-        "account_can_access_character",
-        True,
-        account_name,
-        conf_uid,
-    )
-    return result if isinstance(result, bool) else True
+    return account_features.account_can_access_character(account_name, conf_uid)
 
 
 def process_optional_text_input(data: dict, context: Any) -> dict[str, Any] | None:
-    result = _call_optional("process_text_input", None, data, context)
-    return result if isinstance(result, dict) else None
+    return account_features.process_text_input(data, context)
 
 
 def get_optional_new_history_messages(context: Any) -> list[dict[str, Any]]:
-    result = _call_optional("new_history_messages", [], context)
-    if not isinstance(result, list):
-        return []
-    return [item for item in result if isinstance(item, dict)]
+    return account_features.new_history_messages(context)
 
 
 async def run_optional_character_switch_action(context: Any) -> dict[str, Any] | None:
-    module = _load_optional_backend()
-    if module is None:
-        return None
-    callback = getattr(module, "after_character_switch", None)
-    if not callable(callback):
-        return None
-    result = await callback(context)
-    return result if isinstance(result, dict) else None
+    return await account_features.after_character_switch(context)
 
 
 def augment_optional_tool_status(

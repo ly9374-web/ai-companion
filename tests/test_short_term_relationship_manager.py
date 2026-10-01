@@ -32,19 +32,12 @@ class ShortTermRelationshipParsingTests(unittest.TestCase):
             "之前有些争执，最近关系正在缓和。",
         )
 
-    def test_parse_enforces_seventy_character_value_limit(self):
-        exact = json.dumps(
-            {"short_term_relationship": "近" * 70},
+    def test_parse_preserves_summary_text(self):
+        payload = json.dumps(
+            {"short_term_relationship": "近" * 170},
             ensure_ascii=False,
         )
-        too_long = json.dumps(
-            {"short_term_relationship": "近" * 71},
-            ensure_ascii=False,
-        )
-
-        self.assertEqual(len(self.manager.parse_summary(exact)), 70)
-        with self.assertRaisesRegex(ValueError, "must not exceed 70"):
-            self.manager.parse_summary(too_long)
+        self.assertEqual(len(self.manager.parse_summary(payload)), 170)
 
     def test_parse_rejects_extra_fields_and_non_string_value(self):
         with self.assertRaisesRegex(ValueError, "contain only"):
@@ -60,11 +53,11 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         root = Path(self.temp_dir.name)
-        self.long_relationship_path = root / "long_term_relationship.md"
         self.short_relationship_path = root / "short_term_relationship.md"
         self.manager = ShortTermRelationshipManager(
             relationship_path=self.short_relationship_path,
-            long_term_relationship_path=self.long_relationship_path,
+            update_interval=4,
+            injection_interval=4,
         )
         self.metadata_store = {}
 
@@ -75,15 +68,13 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.metadata_store.update(copy.deepcopy(metadata))
         return True
 
-    async def test_fourth_turn_uses_latest_chats_and_both_complete_files(self):
-        long_file = '{"long_term_relationship":"双方是逐渐熟悉的朋友。"}\n'
+    async def test_fourth_turn_uses_latest_chats_and_short_relationship_file(self):
         old_short_file = '{"short_term_relationship":"最近互动平稳。"}\n'
-        self.long_relationship_path.write_text(long_file, encoding="utf-8")
         self.short_relationship_path.write_text(old_short_file, encoding="utf-8")
         calls = []
 
-        async def summarize(turns, long_relationship, short_relationship):
-            calls.append((turns, long_relationship, short_relationship))
+        async def summarize(turns, short_relationship, browser_time):
+            calls.append((turns, short_relationship))
             return '{"short_term_relationship":"最近交流增多，关系正在升温。"}'
 
         module = "open_llm_vtuber.short_term_relationship_manager"
@@ -113,8 +104,7 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 for index in range(1, 5)
             ],
         )
-        self.assertEqual(calls[0][1], long_file)
-        self.assertEqual(calls[0][2], old_short_file)
+        self.assertEqual(calls[0][1], old_short_file)
         self.assertEqual(
             json.loads(self.short_relationship_path.read_text(encoding="utf-8")),
             {"short_term_relationship": "最近交流增多，关系正在升温。"},
@@ -125,7 +115,7 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_failure_retries_with_latest_four_turns(self):
         calls = []
 
-        async def summarize(turns, long_relationship, short_relationship):
+        async def summarize(turns, short_relationship, browser_time):
             calls.append(copy.deepcopy(turns))
             if len(calls) == 1:
                 return "not json"
@@ -156,7 +146,7 @@ class ShortTermRelationshipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [turn["user"] for turn in calls[1]],
-            ["用户2", "用户3", "用户4", "用户5"],
+            ["用户1", "用户2", "用户3", "用户4", "用户5"],
         )
         self.assertEqual(
             self.metadata_store[SHORT_TERM_RELATIONSHIP_METADATA_KEY][
@@ -197,9 +187,6 @@ class ShortRelationshipPromptInjectionTests(unittest.TestCase):
             texts=[TextData(TextSource.INPUT, "我们最近怎么样？", "Human")],
             metadata={
                 "long_term_memory_context": "[长期记忆]\n- 用户喜欢咖啡。",
-                "long_term_relationship_context": (
-                    '[长期关系]\n{"long_term_relationship":"双方是朋友。"}'
-                ),
                 "short_term_relationship_context": (
                     '[短期关系]\n{"short_term_relationship":"最近正在升温。"}'
                 ),
@@ -210,7 +197,6 @@ class ShortRelationshipPromptInjectionTests(unittest.TestCase):
 
         request_text = messages[-1]["content"][0]["text"]
         self.assertIn("用户喜欢咖啡", request_text)
-        self.assertIn("双方是朋友", request_text)
         self.assertIn("最近正在升温", request_text)
         self.assertIn("我们最近怎么样", request_text)
         self.assertEqual(
@@ -220,10 +206,6 @@ class ShortRelationshipPromptInjectionTests(unittest.TestCase):
                     "role": "user",
                     "content": "我们最近怎么样？",
                     "context_injections": {
-                        "long_term_memory_context": "[长期记忆]\n- 用户喜欢咖啡。",
-                        "long_term_relationship_context": (
-                            '[长期关系]\n{"long_term_relationship":"双方是朋友。"}'
-                        ),
                         "short_term_relationship_context": (
                             '[短期关系]\n{"short_term_relationship":"最近正在升温。"}'
                         ),
@@ -259,7 +241,6 @@ class ShortRelationshipSummaryModelTests(unittest.IsolatedAsyncioTestCase):
 
         result = await agent.summarize_short_term_relationship(
             turns,
-            "长期关系完整内容",
             "旧短期关系完整内容",
         )
 
@@ -269,16 +250,12 @@ class ShortRelationshipSummaryModelTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(summary_llm.calls), 1)
         payload = json.loads(summary_llm.calls[0][0][0]["content"])
-        self.assertEqual(payload["最近四轮聊天记录"], turns)
-        self.assertEqual(
-            payload["long_term_relationship.md全部内容"],
-            "长期关系完整内容",
-        )
+        self.assertEqual(payload["最近6轮聊天记录"], turns)
         self.assertEqual(
             payload["现有short_term_relationship.md全部内容"],
             "旧短期关系完整内容",
         )
-        self.assertIn("不超过70个字符", summary_llm.calls[0][1])
+        self.assertIn("不超过170个字符", summary_llm.calls[0][1])
 
 
 if __name__ == "__main__":

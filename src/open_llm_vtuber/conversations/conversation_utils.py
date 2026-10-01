@@ -3,6 +3,7 @@ import re
 from typing import Optional, Union, Any, List, Dict
 import numpy as np
 import json
+import uuid
 from loguru import logger
 
 from ..message_handler import message_handler
@@ -187,23 +188,60 @@ async def process_user_input(
     return user_input
 
 
+async def notify_playback_ready(
+    client_uid: str,
+    websocket_send: WebSocketSend,
+) -> asyncio.Task:
+    """Notify once, after the matching acknowledgment waiter is registered."""
+    playback_request_id = uuid.uuid4().hex
+    waiter = asyncio.create_task(
+        message_handler.wait_for_response(
+            client_uid,
+            "frontend-playback-complete",
+            request_id=playback_request_id,
+            timeout=180,
+        )
+    )
+    try:
+        await asyncio.sleep(0)
+        await websocket_send(json.dumps({
+            "type": "backend-synth-complete",
+            "request_id": playback_request_id,
+        }))
+    except BaseException:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        raise
+    return waiter
+
+
 async def finalize_conversation_turn(
     tts_manager: TTSTaskManager,
     websocket_send: WebSocketSend,
     client_uid: str,
+    playback_waiter: asyncio.Task | None = None,
 ) -> None:
     """Finalize a conversation turn"""
     if tts_manager.task_list:
         await asyncio.gather(*tts_manager.task_list)
-        await websocket_send(json.dumps({"type": "backend-synth-complete"}))
-
-        response = await message_handler.wait_for_response(
-            client_uid, "frontend-playback-complete"
-        )
-
-        if not response:
-            logger.warning(f"No playback completion response from {client_uid}")
-            return
+        # Generation can finish before the ordered sender has delivered every
+        # payload.  Do not let the frontend finalize an apparently empty queue
+        # while later sentence payloads are still in transit.
+        await tts_manager.wait_until_payloads_sent()
+        if playback_waiter is None:
+            playback_waiter = await notify_playback_ready(client_uid, websocket_send)
+        try:
+            response = await playback_waiter
+            if not response:
+                logger.warning(f"No playback completion response from {client_uid}")
+        finally:
+            if not playback_waiter.done():
+                playback_waiter.cancel()
+                await asyncio.gather(playback_waiter, return_exceptions=True)
+    else:
+        # Silent display payloads are also queued; preserve their order before
+        # ending the conversation chain.
+        await tts_manager.wait_until_payloads_sent()
 
     await websocket_send(json.dumps({"type": "force-new-message"}))
     await send_conversation_end_signal(websocket_send)

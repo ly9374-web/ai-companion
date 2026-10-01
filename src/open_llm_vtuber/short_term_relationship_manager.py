@@ -39,7 +39,7 @@ SHORT_TERM_RELATIONSHIP_PLACEHOLDER = json.dumps(
 
 
 RelationshipSummaryCallback = Callable[
-    [list[dict[str, str]], str, str, str], Awaitable[str]
+    [list[dict[str, str]], str, str], Awaitable[str]
 ]
 
 
@@ -49,7 +49,6 @@ class ShortTermRelationshipManager:
     def __init__(
         self,
         relationship_path: str | Path | None = None,
-        long_term_relationship_path: str | Path | None = None,
         history_root: str | Path = "chat_history",
         update_interval: int = UPDATE_INTERVAL,
         injection_interval: int = INJECTION_INTERVAL,
@@ -60,11 +59,6 @@ class ShortTermRelationshipManager:
             raise ValueError("injection_interval must be at least 1")
         self.relationship_path = (
             Path(relationship_path) if relationship_path is not None else None
-        )
-        self.long_term_relationship_path = (
-            Path(long_term_relationship_path)
-            if long_term_relationship_path is not None
-            else None
         )
         self.history_root = Path(history_root)
         self.update_interval = update_interval
@@ -87,13 +81,6 @@ class ShortTermRelationshipManager:
             return self.relationship_path
         return get_character_history_dir(conf_uid, self.history_root) / (
             "short_term_relationship.md"
-        )
-
-    def _get_long_term_relationship_path(self, conf_uid: str) -> Path:
-        if self.long_term_relationship_path is not None:
-            return self.long_term_relationship_path
-        return get_character_history_dir(conf_uid, self.history_root) / (
-            "long_term_relationship.md"
         )
 
     def _get_relationship_lock(self, conf_uid: str) -> asyncio.Lock:
@@ -516,21 +503,14 @@ class ShortTermRelationshipManager:
             latest_turns = turns_to_consume[-CONTEXT_TURN_LIMIT:]
 
         relationship_path = self._get_relationship_path(conf_uid)
-        long_term_relationship_path = self._get_long_term_relationship_path(
-            conf_uid
-        )
         async with self._get_update_lock(conf_uid):
             async with self._get_relationship_lock(conf_uid):
-                long_term_relationship_file = self._read_text(
-                    long_term_relationship_path
-                )
                 short_term_relationship_file = self._read_text(
                     relationship_path
                 )
             try:
                 raw_output = await summarize(
                     latest_turns,
-                    long_term_relationship_file,
                     short_term_relationship_file,
                     browser_time,
                 )

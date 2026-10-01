@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import stat
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -41,6 +42,18 @@ ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _clear_hidden_flags(path: Path) -> None:
+    """Make a published profile tree visible after renaming a hidden work dir."""
+    hidden_flag = getattr(stat, "UF_HIDDEN", 0)
+    chflags = getattr(os, "chflags", None)
+    if not hidden_flag or chflags is None:
+        return
+    for published_path in (path, *path.rglob("*")):
+        current_flags = getattr(published_path.stat(), "st_flags", 0)
+        if current_flags & hidden_flag:
+            chflags(published_path, current_flags & ~hidden_flag)
 
 
 def _split_oversized_paragraph(paragraph: str, size: int) -> list[str]:
@@ -89,7 +102,8 @@ def _snapshot_normal_turns(
     history_root: Path,
     account_name: str,
     character_name: str,
-) -> tuple[str, int, int]:
+    source_max_bytes: int | None = 50_000,
+) -> tuple[str, int, int, int, int]:
     history_dir = Path(get_full_history_dir(conf_uid, history_root, create=True))
     collected: list[tuple[str, str, int, dict[str, Any]]] = []
     history_count = 0
@@ -111,20 +125,21 @@ def _snapshot_normal_turns(
             )
     collected.sort(key=lambda item: (item[0], item[1], item[2]))
 
-    blocks = [
+    header = (
         f"# 当前用户与角色的非调试聊天快照\n\n"
         f"- 目标用户：{account_name}\n"
         f"- 对话角色：{character_name}\n"
         f"- 角色标识：{conf_uid}\n"
         f"- 快照时间：{_now_iso()}"
-    ]
+    )
+    turn_blocks: list[str] = []
     for global_index, (timestamp, history_uid, turn_index, turn) in enumerate(
         collected,
         start=1,
     ):
         user_content = str(turn["user"].get("content", "")).strip()
         assistant_content = str(turn["assistant"].get("content", "")).strip()
-        blocks.append(
+        turn_blocks.append(
             f"## turn_{global_index:06d}\n\n"
             f"history_uid: {history_uid}\n"
             f"history_turn: {turn_index}\n"
@@ -132,7 +147,29 @@ def _snapshot_normal_turns(
             f"用户（{account_name}）：{user_content}\n\n"
             f"角色（{character_name}）：{assistant_content}"
         )
-    return "\n\n".join(blocks).strip() + "\n", len(collected), history_count
+
+    selected_blocks = turn_blocks
+    if source_max_bytes is not None:
+        if source_max_bytes < 1:
+            raise ValueError("source_max_bytes must be positive or None")
+        selected_reversed: list[str] = []
+        selected_bytes = len(header.encode("utf-8")) + 1
+        for block in reversed(turn_blocks):
+            block_bytes = len(block.encode("utf-8"))
+            if selected_bytes + 2 + block_bytes > source_max_bytes:
+                break
+            selected_reversed.append(block)
+            selected_bytes += 2 + block_bytes
+        selected_blocks = list(reversed(selected_reversed))
+
+    source = "\n\n".join([header, *selected_blocks]).strip() + "\n"
+    return (
+        source,
+        len(selected_blocks),
+        history_count,
+        len(collected),
+        len("\n\n".join(selected_blocks).encode("utf-8")),
+    )
 
 
 def _split_sections(markdown: str) -> OrderedDict[tuple[tuple[int, str], ...], list[str]]:
@@ -334,14 +371,22 @@ class HumanProfileManager:
         build_consolidation_input: Callable[[str, str, str], str],
         build_final_input: Callable[[str, str, str, str, str], str],
         progress: ProgressCallback,
+        source_max_bytes: int | None = 50_000,
     ) -> dict[str, Any]:
         await progress({"step": "snapshot", "progress": 3})
-        source, turn_count, history_count = await asyncio.to_thread(
+        (
+            source,
+            turn_count,
+            history_count,
+            available_turn_count,
+            selected_content_bytes,
+        ) = await asyncio.to_thread(
             _snapshot_normal_turns,
             conf_uid,
             history_root,
             account_name,
             character_name,
+            source_max_bytes,
         )
         if turn_count == 0:
             return {"status": "empty", "turn_count": 0, "history_count": history_count}
@@ -368,6 +413,10 @@ class HumanProfileManager:
                 "created_at": _now_iso(),
                 "history_count": history_count,
                 "turn_count": turn_count,
+                "available_turn_count": available_turn_count,
+                "source_max_bytes": source_max_bytes,
+                "selected_content_bytes": selected_content_bytes,
+                "source_bytes": len(source.encode("utf-8")),
                 "chunk_count": len(chunks),
                 "debug_filter": "excluded pairs where either message has debug_mode=true",
             }
@@ -483,6 +532,7 @@ class HumanProfileManager:
             profile_number = max(existing_numbers, default=0) + 1
             final_dir = profiles_root / f"{profile_number:03d}"
             os.replace(working_dir, final_dir)
+            _clear_hidden_flags(final_dir)
             await progress({"step": "complete", "progress": 100})
             return {
                 "status": "success",

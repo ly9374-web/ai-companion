@@ -29,9 +29,10 @@ from prompts import prompt_loader
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CHARACTERS_DIR = PROJECT_ROOT / "characters"
-AVATARS_DIR = PROJECT_ROOT / "avatars"
-EXPRESSION_TEMPLATE_DIR = PROJECT_ROOT / "expression_algernon"
+CHARACTERS_DIR = PROJECT_ROOT / "content" / "characters"
+AVATARS_DIR = PROJECT_ROOT / "content" / "avatars"
+EXPRESSIONS_DIR = PROJECT_ROOT / "content" / "expressions"
+EXPRESSION_TEMPLATE_DIR = EXPRESSIONS_DIR / "expression_algernon"
 MODEL_PATH = PROJECT_ROOT / "models" / "isnet-anime.onnx"
 MODEL_URL = (
     "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
@@ -456,7 +457,7 @@ def _target_paths(character_name: str) -> tuple[Path, Path, Path]:
     return (
         CHARACTERS_DIR / f"{character_name}.yaml",
         AVATARS_DIR / f"{character_name}.png",
-        PROJECT_ROOT / f"expression_{character_name}",
+        EXPRESSIONS_DIR / f"expression_{character_name}",
     )
 
 
@@ -670,6 +671,7 @@ class CharacterGenerationManager:
             config_path, avatar_path, expression_path = _target_paths(job.character_name)
             CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
             AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+            EXPRESSIONS_DIR.mkdir(parents=True, exist_ok=True)
             if config_path.exists() or avatar_path.exists() or expression_path.exists():
                 raise CharacterGenerationConflict("同名角色或资源已存在")
 

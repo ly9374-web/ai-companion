@@ -54,9 +54,6 @@ class PromptLoaderTests(unittest.TestCase):
         cases = {
             "chat.contexts.clipboard": {"content": "sample"},
             "chat.contexts.long_term_memory": {"memories": "- sample"},
-            "chat.contexts.long_term_relationship": {
-                "relationship_file": "{}"
-            },
             "chat.contexts.short_term_relationship": {
                 "relationship_file": "{}"
             },
@@ -69,17 +66,15 @@ class PromptLoaderTests(unittest.TestCase):
 
 
 class PromptBuilderTests(unittest.TestCase):
-    def test_complete_chat_user_prompt_shows_all_injection_positions(self):
+    def test_complete_chat_user_prompt_shows_active_injection_positions(self):
         request = prompt_builder.build_user_request(
             text_prompt="你好",
             long_term_memory_context="长期记忆背景",
-            long_term_relationship_context="长期关系背景",
             short_term_relationship_context="短期关系背景",
             has_images=False,
         )
 
-        self.assertLess(request.index("长期记忆背景"), request.index("长期关系背景"))
-        self.assertLess(request.index("长期关系背景"), request.index("短期关系背景"))
+        self.assertLess(request.index("长期记忆背景"), request.index("短期关系背景"))
         self.assertIn("[本轮用户输入]\n你好", request)
 
     def test_summary_user_prompts_are_yaml_driven(self):
@@ -90,29 +85,29 @@ class PromptBuilderTests(unittest.TestCase):
         memory_prefix = "<人物设定>账户编辑后的人物设定</人物设定>\n"
         self.assertTrue(memory_request.startswith(memory_prefix))
         memory_payload = json.loads(memory_request.removeprefix(memory_prefix))
-        long_payload = json.loads(
-            prompt_builder.build_long_term_relationship_summary_input(
-                ["长期记忆原文"],
-                "长期关系原文",
-                "短期关系原文",
-            )
-        )
         short_payload = json.loads(
             prompt_builder.build_short_term_relationship_summary_input(
                 [{"user": "用户说话", "assistant": "角色回答"}],
-                "长期关系原文",
                 "短期关系原文",
+            )
+        )
+        score_payload = json.loads(
+            prompt_builder.build_current_relationship_score_input(
+                [{"user": "用户说话", "assistant": "角色回答"}]
             )
         )
 
         self.assertEqual(memory_payload["最近6轮对话"][0]["user"], "用户说话")
         self.assertEqual(
-            long_payload["long_term_memory.md内容"], ["长期记忆原文"]
-        )
-        self.assertEqual(
             short_payload["现有short_term_relationship.md全部内容"],
             "短期关系原文",
         )
+        self.assertEqual(score_payload["最近5轮聊天记录"][0]["user"], "用户说话")
+
+    def test_relationship_tier_uses_score_range(self):
+        guidance = prompt_builder.build_current_relationship_guidance(46)
+        self.assertIn("#当前关系状态和行为指导：", guidance)
+        self.assertIn("熟悉度 / 好感度：48%", guidance)
 
     def test_mcp_prompt_uses_yaml_templates(self):
         prompt = prompt_builder.build_mcp_prompt(
@@ -157,7 +152,7 @@ class CharacterSystemPromptTests(unittest.TestCase):
         self.assertIn("为自己困在虚拟世界感到无聊", algernon)
         self.assertIn("# 对话规范", algernon)
 
-        alt = read_yaml(str(PROJECT_ROOT / "characters" / "cuige.yaml"))[
+        alt = read_yaml(str(PROJECT_ROOT / "content" / "characters" / "cuige.yaml"))[
             "character_config"
         ]
         merged = config.character_config.model_dump()

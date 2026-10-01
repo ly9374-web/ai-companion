@@ -11,8 +11,6 @@ export class TaskQueue {
 
   private activeTasks = new Set<Promise<void>>();
 
-  private generation = 0;
-
   constructor(taskIntervalMs = 3000) {
     this.taskInterval = taskIntervalMs;
   }
@@ -23,10 +21,7 @@ export class TaskQueue {
   }
 
   clearQueue() {
-    this.generation += 1;
     this.queue = [];
-    this.activeTasks.clear();
-    this.running = false;
   }
 
   private async runNextTask() {
@@ -39,7 +34,6 @@ export class TaskQueue {
     }
 
     this.running = true;
-    const taskGeneration = this.generation;
     const task = this.queue.shift();
     if (task) {
       const taskPromise = task();
@@ -52,10 +46,8 @@ export class TaskQueue {
         console.error('Task Queue Error', error);
       } finally {
         this.activeTasks.delete(taskPromise);
-        if (taskGeneration === this.generation) {
-          this.running = false;
-          this.runNextTask();
-        }
+        this.running = false;
+        this.runNextTask();
       }
     }
   }

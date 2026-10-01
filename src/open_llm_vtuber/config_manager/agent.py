@@ -24,6 +24,12 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
     rolling_summary_model: str = Field(
         "deepseek-v4-pro", alias="rolling_summary_model"
     )
+    persona_profile_model: str = Field(
+        "deepseek-v4-flash", alias="persona_profile_model"
+    )
+    persona_profile_source_max_bytes: int = Field(
+        50_000, alias="persona_profile_source_max_bytes", ge=1_000
+    )
 
     faster_first_response: Optional[bool] = Field(True, alias="faster_first_response")
     segment_method: Literal["regex", "pysbd"] = Field("pysbd", alias="segment_method")
@@ -42,8 +48,8 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
             zh="Basic Memory Agent 智能体使用的大语言模型选项",
         ),
         "long_term_summary_model": Description(
-            en="DeepSeek model used for long-term memory and relationship summaries",
-            zh="用于长期记忆和长期关系总结的 DeepSeek 模型",
+            en="DeepSeek model used for long-term memory, short-term relationship, and relationship scoring",
+            zh="用于长期记忆、短期关系总结和当前关系评分的 DeepSeek 模型",
         ),
         "long_term_reconcile_model": Description(
             en="DeepSeek model used to reconcile new and existing long-term memories",
@@ -52,6 +58,14 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
         "rolling_summary_model": Description(
             en="DeepSeek model used for per-chat rolling summaries",
             zh="用于单次聊天滚动总结的 DeepSeek 模型",
+        ),
+        "persona_profile_model": Description(
+            en="DeepSeek model used for persona profile generation",
+            zh="用于人物侧写生成的 DeepSeek 模型",
+        ),
+        "persona_profile_source_max_bytes": Description(
+            en="Maximum UTF-8 bytes of recent non-debug turns used for persona profiles",
+            zh="人物侧写使用的最近非调试完整对话的 UTF-8 字节上限",
         ),
         "faster_first_response": Description(
             en="Whether to respond as soon as encountering a comma in the first sentence to reduce latency (default: True)",

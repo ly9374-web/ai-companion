@@ -73,6 +73,10 @@ class AudioManager {
   hasCurrentAudio(): boolean {
     return this.currentAudio !== null;
   }
+
+  isCurrentAudio(audio: HTMLAudioElement): boolean {
+    return this.currentAudio === audio;
+  }
 }
 
 // Export singleton instance

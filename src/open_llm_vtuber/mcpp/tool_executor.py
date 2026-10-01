@@ -1,5 +1,6 @@
 import json
 import datetime
+import re
 from loguru import logger
 from typing import (
     Dict,
@@ -16,6 +17,29 @@ from .tool_manager import ToolManager
 from prompts import prompt_builder
 from ..optional_features import augment_optional_tool_status
 
+# Matches http(s) URLs; excludes common wrapping/closing characters so that
+# URLs embedded in sentences, markdown links or JSON snippets stay clean.
+MEDIA_URL_PATTERN = re.compile(r"https?://[^\s\"'<>\)\]\}，。；、！？]+")
+
+MEDIA_URL_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".flac",
+    ".aac",
+    ".ogg",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".avi",
+)
+
 
 class ToolExecutor:
     def __init__(
@@ -25,6 +49,31 @@ class ToolExecutor:
     ):
         self._mcp_client = mcp_client
         self._tool_manager = tool_manager
+
+    @staticmethod
+    def _extract_media_urls(
+        text_content: str, content_items: List[Dict[str, Any]],
+        image_result: bool = False,
+    ) -> List[str]:
+        """Collect media URLs from tool results for frontend display.
+
+        Sources: explicit url attributes on content items, plus URLs found in
+        the text content that point to media files (by extension).
+        """
+        urls: List[str] = []
+        for item in content_items:
+            item_url = item.get("url")
+            if isinstance(item_url, str) and item_url.startswith("http"):
+                if item_url not in urls:
+                    urls.append(item_url)
+        if text_content:
+            for match in MEDIA_URL_PATTERN.findall(text_content):
+                if match in urls:
+                    continue
+                path = match.split("?", 1)[0].lower()
+                if image_result or path.endswith(MEDIA_URL_EXTENSIONS):
+                    urls.append(match)
+        return urls
 
     def parse_tool_call(self, call: Union[Dict[str, Any], ToolCallObject]) -> tuple:
         """Parse tool call from different formats.
@@ -137,10 +186,17 @@ class ToolExecutor:
         for item in data:
             server = item.get("mcp_server")
             tool_name = item.get("tool")
-            arguments_str = item.get("arguments")
-            if all([server, tool_name, arguments_str]):
+            arguments_value = item.get("arguments")
+            if server and tool_name and arguments_value is not None:
                 try:
-                    args_dict = json.loads(arguments_str)
+                    if isinstance(arguments_value, dict):
+                        args_dict = arguments_value
+                    elif isinstance(arguments_value, str):
+                        args_dict = json.loads(arguments_value)
+                    else:
+                        raise TypeError("Tool arguments must be an object or JSON string")
+                    if not isinstance(args_dict, dict):
+                        raise TypeError("Tool arguments must decode to an object")
                     parsed_tools.append(
                         {
                             "name": tool_name,
@@ -164,6 +220,7 @@ class ToolExecutor:
         self,
         tool_calls: Union[List[Dict[str, Any]], List[ToolCallObject]],
         caller_mode: Literal["Claude", "OpenAI", "Prompt"],
+        allowed_tool_names: set[str] | frozenset[str] | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute tools and yield status updates."""
         tool_results_for_llm = []
@@ -210,6 +267,36 @@ class ToolExecutor:
                 if formatted_result:
                     tool_results_for_llm.append(formatted_result)
                 continue  # Skip execution logic for this call
+
+            if (
+                allowed_tool_names is not None
+                and tool_name not in allowed_tool_names
+            ):
+                logger.warning(
+                    "Blocked tool '{}' because it is not enabled for this turn.",
+                    tool_name,
+                )
+                result_content = prompt_builder.load_runtime_prompt(
+                    "tool_not_allowed_this_turn", tool_name=tool_name
+                )
+                status_update = {
+                    "type": "tool_call_status",
+                    "tool_id": tool_id,
+                    "tool_name": tool_name,
+                    "status": "error",
+                    "content": result_content,
+                    "timestamp": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat()
+                    + "Z",
+                }
+                yield status_update
+                formatted_result = self.format_tool_result(
+                    caller_mode, tool_id, result_content, True
+                )
+                if formatted_result:
+                    tool_results_for_llm.append(formatted_result)
+                continue
 
             # Yield 'running' status before execution
             yield {
@@ -283,9 +370,19 @@ class ToolExecutor:
                 "content": status_content
                 if not is_error
                 else f"Error: {text_content}",  # Use descriptive content or error message
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                "timestamp": datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat()
                 + "Z",
             }
+
+            if not is_error:
+                media_urls = self._extract_media_urls(
+                    text_content, content_items,
+                    image_result=tool_name == "text_to_image",
+                )
+                if media_urls:
+                    status_update["media_urls"] = media_urls
 
             status_update = augment_optional_tool_status(
                 tool_name,

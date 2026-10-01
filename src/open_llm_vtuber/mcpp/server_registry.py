@@ -2,7 +2,10 @@
 
 import shutil
 import json
+import re
+import os
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Optional, Union, Any
 from loguru import logger
@@ -11,6 +14,25 @@ from .types import MCPServer
 from .utils.path import validate_file
 
 DEFAULT_CONFIG_PATH = "mcp_servers.json"
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*$", re.IGNORECASE)
+_DURATION_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
+
+
+def _parse_timeout(value: Any) -> Optional[timedelta]:
+    """Normalize a JSON timeout value (int/float seconds or '90s'/'5m') to timedelta."""
+    if value is None:
+        return None
+    if isinstance(value, timedelta):
+        return value
+    if isinstance(value, (int, float)):
+        return timedelta(seconds=value)
+    if isinstance(value, str):
+        match = _DURATION_RE.match(value)
+        if match:
+            return timedelta(seconds=float(match.group(1)) * _DURATION_UNITS[match.group(2).lower()])
+    logger.warning(f"MCPSR: Invalid timeout value {value!r}; falling back to default.")
+    return None
 
 
 class ServerRegistry:
@@ -80,13 +102,20 @@ class ServerRegistry:
                     )
                     continue
 
+            server_env = server_details.get("env", None)
+            if server_env:
+                server_env = {
+                    key: value or os.environ.get(key, "")
+                    for key, value in server_env.items()
+                }
+
             self.servers[server_name] = MCPServer(
                 name=server_name,
                 command=command,
                 args=server_details["args"],
-                env=server_details.get("env", None),
+                env=server_env,
                 cwd=server_details.get("cwd", None),
-                timeout=server_details.get("timeout", None),
+                timeout=_parse_timeout(server_details.get("timeout", None)),
             )
             logger.debug(f"MCPSR: Loaded server: '{server_name}'.")
 
@@ -99,5 +128,29 @@ class ServerRegistry:
             logger.warning(f"MCPSR: Server '{server_name}' not found. Cannot remove.")
 
     def get_server(self, server_name: str) -> Optional[MCPServer]:
-        """Get the server by name."""
+        """Get the server by the name."""
         return self.servers.get(server_name, None)
+
+    def update_server_env(
+        self, server_name: str, env_updates: Dict[str, str]
+    ) -> bool:
+        """Merge environment variables into an already loaded server.
+
+        Takes effect the next time the server process is spawned; already
+        running sessions keep their original environment.
+        """
+        server = self.servers.get(server_name)
+        if not server:
+            logger.warning(
+                f"MCPSR: Server '{server_name}' not found. Cannot update env."
+            )
+            return False
+
+        merged_env: Dict[str, str] = dict(server.env or {})
+        for key, value in env_updates.items():
+            if value is None:
+                continue
+            merged_env[key] = value
+        server.env = merged_env
+        logger.debug(f"MCPSR: Updated env for server '{server_name}'.")
+        return True

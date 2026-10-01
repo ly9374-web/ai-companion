@@ -139,6 +139,7 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
           name: toolMessageData.name || existingMsg.name,
           content: toolMessageData.content || existingMsg.content, // Update content (result/error or keep input)
           timestamp: toolMessageData.timestamp!, // Update timestamp
+          media_urls: toolMessageData.media_urls || existingMsg.media_urls, // Media URLs from tool results
         };
         return updatedMessages;
       } else {
@@ -153,6 +154,7 @@ export function ChatHistoryProvider({ children }: { children: React.ReactNode })
           status: toolMessageData.status,
           content: toolMessageData.content || '', // Initial content (input)
           timestamp: toolMessageData.timestamp!,
+          media_urls: toolMessageData.media_urls,
           // name/avatar could potentially be added if needed
         };
         return [...prevMessages, newToolMessage];

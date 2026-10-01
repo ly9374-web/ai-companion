@@ -19,9 +19,11 @@ import { PERSONA_PROFILE_TOAST_ID } from "@/constants/persona-profile";
 import {
   getGeneralRuntimeSettings,
   setGeneralRuntimeSettings,
+  subscribeGeneralRuntimeSettings,
 } from "@/constants/general-runtime-settings";
 import { useAccount } from "@/context/account-context";
 import { OptionalGeneralSettings } from "@optional-feature";
+import CloudRestore from "./cloud-restore";
 
 interface GeneralProps {
   onSave?: (callback: () => void) => () => void;
@@ -84,6 +86,12 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
   const runtimeSettingsRef = useRef({ generateAudio, debugMode });
   const savedRuntimeSettingsRef = useRef(initialRuntimeSettings);
   runtimeSettingsRef.current = { generateAudio, debugMode };
+
+  useEffect(() => subscribeGeneralRuntimeSettings((nextSettings) => {
+    setGenerateAudio(nextSettings.generateAudio);
+    setDebugMode(nextSettings.debugMode);
+    savedRuntimeSettingsRef.current = nextSettings;
+  }), []);
 
   const handleGenerateAudioChange = (enabled: boolean): void => {
     setGenerateAudio(enabled);
@@ -292,6 +300,8 @@ function General({ onSave, onCancel }: GeneralProps): JSX.Element {
           {t("settings.general.rollingSummary")}
         </Button>
       )}
+
+      <CloudRestore />
 
       <Button colorPalette="red" variant="outline" onClick={logout}>
         {t("account.logout")}

@@ -11,6 +11,8 @@ export const useASRSettings = () => {
     setAutoStartMicOn,
     autoStartMicOnConvEnd,
     setAutoStartMicOnConvEnd,
+    autoGenerateAudioOnMic,
+    setAutoGenerateAudioOnMic,
   } = useVAD();
 
   const localSettingsRef = useRef<VADSettings>(settings);
@@ -18,16 +20,19 @@ export const useASRSettings = () => {
   const originalAutoStopMicRef = useRef(autoStopMic);
   const originalAutoStartMicOnRef = useRef(autoStartMicOn);
   const originalAutoStartMicOnConvEndRef = useRef(autoStartMicOnConvEnd);
+  const originalAutoGenerateAudioOnMicRef = useRef(autoGenerateAudioOnMic);
   const [localVoiceInterruption, setLocalVoiceInterruption] = useState(autoStopMic);
   const [localAutoStartMic, setLocalAutoStartMic] = useState(autoStartMicOn);
   const [localAutoStartMicOnConvEnd, setLocalAutoStartMicOnConvEnd] = useState(autoStartMicOnConvEnd);
+  const [localAutoGenerateAudioOnMic, setLocalAutoGenerateAudioOnMic] = useState(autoGenerateAudioOnMic);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
 
   useEffect(() => {
     setLocalVoiceInterruption(autoStopMic);
     setLocalAutoStartMic(autoStartMicOn);
     setLocalAutoStartMicOnConvEnd(autoStartMicOnConvEnd);
-  }, [autoStopMic, autoStartMicOn, autoStartMicOnConvEnd]);
+    setLocalAutoGenerateAudioOnMic(autoGenerateAudioOnMic);
+  }, [autoStopMic, autoStartMicOn, autoStartMicOnConvEnd, autoGenerateAudioOnMic]);
 
   const handleInputChange = (key: keyof VADSettings, value: number | string): void => {
     if (value === '' || value === '-') {
@@ -57,12 +62,18 @@ export const useASRSettings = () => {
     setAutoStartMicOnConvEnd(value);
   };
 
+  const handleAutoGenerateAudioOnMicChange = (value: boolean) => {
+    setLocalAutoGenerateAudioOnMic(value);
+    setAutoGenerateAudioOnMic(value);
+  };
+
   const handleSave = (): void => {
     updateSettings(localSettingsRef.current);
     originalSettingsRef.current = localSettingsRef.current;
     originalAutoStopMicRef.current = localVoiceInterruption;
     originalAutoStartMicOnRef.current = localAutoStartMic;
     originalAutoStartMicOnConvEndRef.current = localAutoStartMicOnConvEnd;
+    originalAutoGenerateAudioOnMicRef.current = localAutoGenerateAudioOnMic;
   };
 
   const handleCancel = (): void => {
@@ -73,6 +84,8 @@ export const useASRSettings = () => {
     setAutoStartMicOn(originalAutoStartMicOnRef.current);
     setLocalAutoStartMicOnConvEnd(originalAutoStartMicOnConvEndRef.current);
     setAutoStartMicOnConvEnd(originalAutoStartMicOnConvEndRef.current);
+    setLocalAutoGenerateAudioOnMic(originalAutoGenerateAudioOnMicRef.current);
+    setAutoGenerateAudioOnMic(originalAutoGenerateAudioOnMicRef.current);
     forceUpdate();
   };
 
@@ -81,9 +94,11 @@ export const useASRSettings = () => {
     autoStopMic: localVoiceInterruption,
     autoStartMicOn: localAutoStartMic,
     autoStartMicOnConvEnd: localAutoStartMicOnConvEnd,
+    autoGenerateAudioOnMic: localAutoGenerateAudioOnMic,
     setAutoStopMic: handleVoiceInterruptionChange,
     setAutoStartMicOn: handleAutoStartMicChange,
     setAutoStartMicOnConvEnd: handleAutoStartMicOnConvEndChange,
+    setAutoGenerateAudioOnMic: handleAutoGenerateAudioOnMicChange,
     handleInputChange,
     handleSave,
     handleCancel,

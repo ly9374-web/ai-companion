@@ -87,7 +87,6 @@ class BatchInput(BaseInput):
             - 'skip_history': Boolean flag indicating if this input should be skipped in local history storage
             - 'long_term_memory_context': Request-scoped RAG memory content
             - 'rolling_summary_context': Request-scoped summary outside direct history
-            - 'long_term_relationship_context': Hidden long relationship snapshot
             - 'short_term_relationship_context': Hidden short relationship snapshot
             - 'tts_preference_change_context': One-turn notice for user-initiated TTS changes
             - 'browser_time': Browser-local time supplied with the current input

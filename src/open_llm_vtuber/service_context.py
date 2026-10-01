@@ -38,17 +38,23 @@ from .config_manager import (
 from .config_manager.tts import QWEN_TTS_VOICE_LABELS
 from .summary_coordinator import SummaryCoordinator
 from .account_manager import (
+    queue_tts_voice_change,
+    consume_tts_voice_change,
     ensure_character_profile,
     get_account_history_root,
     read_system_prompt_override,
     write_system_prompt_override,
     delete_system_prompt_override,
+    get_persisted_rag_options,
+    get_persisted_minimax_api_key,
+    update_persisted_minimax_api_key,
 )
 from .optional_features import get_optional_account_policy
 from .long_term_memory_manager import LongTermMemoryManager
-from .long_term_relationship_manager import LongTermRelationshipManager
+from .current_relationship_score_manager import CurrentRelationshipScoreManager
 from .short_term_relationship_manager import ShortTermRelationshipManager
 from .rolling_summary_manager import RollingSummaryManager
+from .profiler_session import is_profiler_character
 
 
 _PERSISTENCE_MANAGER_CACHE: dict[str, tuple] = {}
@@ -63,7 +69,7 @@ def _get_persistence_managers(history_root: Path) -> tuple:
         if managers is None:
             managers = (
                 LongTermMemoryManager(history_root=history_root),
-                LongTermRelationshipManager(history_root=history_root),
+                CurrentRelationshipScoreManager(history_root=history_root),
                 ShortTermRelationshipManager(history_root=history_root),
                 RollingSummaryManager(history_root=history_root),
             )
@@ -101,6 +107,8 @@ class ServiceContext:
 
         self.history_uid: str = ""
         self.account_name: str = ""
+        self._mcp_account_name: str | None = None
+        self.mobile_image_only: bool = False
         # Whether the user selected the English conversation starter, so every
         # subsequent user prompt is steered to expect an English reply.
         self.english_mode: bool = False
@@ -115,20 +123,22 @@ class ServiceContext:
         # Debug sessions keep ordinary chat history but never feed completed
         # turns into persistent or rolling summarizers.
         self.debug_mode: bool = False
+        # Mobile prompt logging is opt-in for this connection only.
+        self.mobile_prompt_logging: bool = False
         self.max_history_turns: int = 8
         self.rag_top_k: int = 5
         self.rag_threshold: float = 0.5
         self.rag_hybrid_weight: float = 0.5
         self._ai_known_tts_voice: str | None = None
         self._tts_preference_change_pending: bool = False
-        self._deepseek_api_key: str | None = None
+        self._deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY") or None
         self._grok_api_key: str | None = None
-        self._qwen_api_key: str | None = None
+        self._qwen_api_key: str | None = os.environ.get("QWEN_API_KEY") or None
         self.grok_enabled: bool = False
         self.summary_coordinator = SummaryCoordinator()
         (
             self.long_term_memory_manager,
-            self.long_term_relationship_manager,
+            self.current_relationship_score_manager,
             self.short_term_relationship_manager,
             self.rolling_summary_manager,
         ) = _get_persistence_managers(
@@ -143,11 +153,14 @@ class ServiceContext:
             feature_policy.get("isolated_conversation_context", False)
         )
         self.history_root = get_account_history_root(account_name)
+        # RAG settings are account-wide so a value chosen on one device (e.g.
+        # the desktop page) also applies to phones that never send their own.
+        self.refresh_rag_options()
         ensure_character_profile(account_name, self.character_config.conf_uid)
         self.character_config.human_name = account_name
         (
             self.long_term_memory_manager,
-            self.long_term_relationship_manager,
+            self.current_relationship_score_manager,
             self.short_term_relationship_manager,
             self.rolling_summary_manager,
         ) = _get_persistence_managers(
@@ -217,6 +230,8 @@ class ServiceContext:
 
     async def _init_mcp_components(self, use_mcpp, enabled_servers):
         """Initializes MCP components based on configuration, dynamically fetching tool info."""
+        if self.mobile_image_only:
+            enabled_servers = [name for name in (enabled_servers or []) if name == "MiniMax"]
         logger.debug(
             f"Initializing MCP components: use_mcpp={use_mcpp}, enabled_servers={enabled_servers}"
         )
@@ -230,6 +245,17 @@ class ServiceContext:
 
         if use_mcpp and enabled_servers:
             self.mcp_server_registery = ServerRegistry()
+            # Discovery and calls must use the same account-scoped registry.
+            self.tool_adapter = ToolAdapter(self.mcp_server_registery)
+            mcp_account_name = self.account_name or self._mcp_account_name
+            if mcp_account_name:
+                self.mcp_server_registery.update_server_env(
+                    "MiniMax", {
+                        "MINIMAX_API_KEY": get_persisted_minimax_api_key(
+                            mcp_account_name
+                        )
+                    }
+                )
             logger.info("ServerRegistry initialized or referenced.")
 
             if not self.tool_adapter:
@@ -305,6 +331,52 @@ class ServiceContext:
                 "MCP components not initialized (use_mcpp is False or no enabled servers)."
             )
 
+    async def _refresh_mcp_tools(self) -> None:
+        """Re-run MCP tool discovery and rebuild tool components for this session.
+
+        Used after runtime credentials change (e.g. a browser-supplied MiniMax
+        key arrives after the initial discovery already ran).
+        """
+        if not self.tool_adapter or not self.mcp_client or not self.character_config:
+            logger.warning("Cannot refresh MCP tools: adapter/client not ready.")
+            return
+        agent_settings = (
+            self.character_config.agent_config.agent_settings.basic_memory_agent
+        )
+        enabled_servers = agent_settings.mcp_enabled_servers
+        if self.mobile_image_only:
+            enabled_servers = [name for name in (enabled_servers or []) if name == "MiniMax"]
+        if not enabled_servers:
+            return
+        try:
+            (
+                mcp_prompt_string,
+                openai_tools,
+                claude_tools,
+            ) = await self.tool_adapter.get_tools(enabled_servers)
+            _, raw_tools_dict = await self.tool_adapter.get_server_and_tool_info(
+                enabled_servers
+            )
+            self.mcp_prompt = mcp_prompt_string
+            self.tool_manager = ToolManager(
+                formatted_tools_openai=openai_tools,
+                formatted_tools_claude=claude_tools,
+                initial_tools_dict=raw_tools_dict,
+            )
+            self.tool_executor = ToolExecutor(self.mcp_client, self.tool_manager)
+            refresh = getattr(self.agent_engine, "refresh_mcp_tools", None)
+            if callable(refresh):
+                refresh(
+                    tool_manager=self.tool_manager,
+                    tool_executor=self.tool_executor,
+                    mcp_prompt_string=self.mcp_prompt,
+                )
+            logger.info(
+                f"MCP tools refreshed: {len(openai_tools)} OpenAI tools available."
+            )
+        except Exception as e:
+            logger.error(f"Failed to refresh MCP tools: {e}", exc_info=True)
+
     async def close(self):
         """Clean up resources, especially the MCPClient."""
         logger.info("Closing ServiceContext resources...")
@@ -331,6 +403,8 @@ class ServiceContext:
         tool_adapter: ToolAdapter | None = None,
         send_text: Callable = None,
         client_uid: str = None,
+        account_name: str | None = None,
+        mobile_image_only: bool = False,
     ) -> None:
         """Load cached heavy engines and initialize client-owned conversation state.
 
@@ -355,6 +429,8 @@ class ServiceContext:
         self.tool_adapter = tool_adapter
         self.send_text = send_text
         self.client_uid = client_uid
+        self.mobile_image_only = mobile_image_only
+        self._mcp_account_name = account_name
 
         self.max_history_turns = (
             self.character_config.agent_config.agent_settings.basic_memory_agent.max_history_turns
@@ -488,6 +564,14 @@ class ServiceContext:
         self.rag_threshold = max(0.0, min(1.0, float(threshold)))
         self.rag_hybrid_weight = max(0.0, min(1.0, float(hybrid_weight)))
 
+    def refresh_rag_options(self) -> None:
+        """Use the latest account settings for this conversation turn."""
+        if not self.account_name:
+            return
+        persisted_rag = get_persisted_rag_options(self.account_name)
+        if persisted_rag:
+            self.set_rag_options(**persisted_rag)
+
     def set_qwen_tts_options(
         self,
         *,
@@ -501,6 +585,7 @@ class ServiceContext:
         if tts_config.tts_model != "qwen_tts" or tts_config.qwen_tts is None:
             raise ValueError("The active TTS engine does not support Qwen voice switching")
 
+        previous_voice = tts_config.qwen_tts.voice
         if notify_ai and self._ai_known_tts_voice is None:
             self._ai_known_tts_voice = tts_config.qwen_tts.voice
 
@@ -524,17 +609,20 @@ class ServiceContext:
             )
         if sync_ai_preferences:
             self.sync_ai_tts_preferences()
-        elif notify_ai:
-            self._tts_preference_change_pending = True
+        elif notify_ai and voice is not None and voice != previous_voice:
+            queue_tts_voice_change(
+                self.account_name, self.character_config.conf_uid, voice
+            )
         logger.info("Qwen TTS options updated for client {}", self.client_uid)
 
-    def set_runtime_api_keys(
+    async def set_runtime_api_keys(
         self,
         *,
         deepseek_api_key: str,
         grok_api_key: str,
         grok_enabled: bool,
         qwen_api_key: str,
+        minimax_api_key: str | None = None,
         deepseek_model: str | None = None,
     ) -> None:
         """Apply browser-provided credentials to this session without persistence."""
@@ -543,12 +631,51 @@ class ServiceContext:
         self._qwen_api_key = qwen_api_key
         self.grok_enabled = grok_enabled
 
+        # MiniMax MCP key: override mcp_servers.json when the browser supplied
+        # a non-empty key. Tool discovery already ran at connection time (when
+        # the key had not arrived yet), so after updating the env we re-run
+        # discovery to make MiniMax tools appear for this session.
+        if minimax_api_key and minimax_api_key.strip():
+            key = minimax_api_key.strip()
+            updated = False
+            if self.mcp_server_registery:
+                updated = (
+                    self.mcp_server_registery.update_server_env(
+                        "MiniMax", {"MINIMAX_API_KEY": key}
+                    )
+                    or updated
+                )
+            # ToolAdapter 持有独立的 registry（工具发现走它），需要一并更新
+            adapter_registry = getattr(self.tool_adapter, "server_registery", None)
+            if adapter_registry:
+                updated = (
+                    adapter_registry.update_server_env(
+                        "MiniMax", {"MINIMAX_API_KEY": key}
+                    )
+                    or updated
+                )
+            if updated:
+                logger.info(
+                    "MiniMax MCP key applied from browser for client {}",
+                    self.client_uid,
+                )
+                # 丢弃可能用旧 Key 建立的 MiniMax 会话，下次调用重新拉起
+                if self.mcp_client:
+                    self.mcp_client.invalidate_server_session("MiniMax")
+                minimax_loaded = self.tool_manager and any(
+                    getattr(t, "related_server", "") == "MiniMax"
+                    for t in self.tool_manager.tools.values()
+                )
+                if not minimax_loaded:
+                    await self._refresh_mcp_tools()
+
         if self.agent_engine is not None:
             for attribute in (
                 "_deepseek_llm",
                 "_summary_llm",
                 "_reconcile_llm",
                 "_rolling_summary_llm",
+                "_persona_profile_llm",
             ):
                 llm = getattr(self.agent_engine, attribute, None)
                 if llm is not None and hasattr(llm, "set_api_key"):
@@ -576,8 +703,28 @@ class ServiceContext:
 
         logger.info("Runtime API keys updated for client {}", self.client_uid)
 
+    async def set_minimax_account_key(self, key: str) -> None:
+        """Persist a desktop key for this account and refresh its MCP session."""
+        if not self.account_name:
+            raise ValueError("Account required")
+        update_persisted_minimax_api_key(self.account_name, key)
+        await self.refresh_minimax_account_key()
+
+    async def refresh_minimax_account_key(self) -> None:
+        """Apply this account's saved key to a connected MCP session."""
+        if not self.mcp_server_registery:
+            return
+        self.mcp_server_registery.update_server_env(
+            "MiniMax", {
+                "MINIMAX_API_KEY": get_persisted_minimax_api_key(self.account_name)
+            }
+        )
+        if self.mcp_client:
+            self.mcp_client.invalidate_server_session("MiniMax")
+        await self._refresh_mcp_tools()
+
     def has_deepseek_api_key(self) -> bool:
-        """Return whether this browser session supplied a usable LLM key."""
+        """Return whether this session has a usable browser or server LLM key."""
         return bool(self._deepseek_api_key and self._deepseek_api_key.strip())
 
     def has_grok_api_key(self) -> bool:
@@ -599,27 +746,14 @@ class ServiceContext:
 
     def consume_tts_preference_change_prompt(self) -> str:
         """Return a one-turn prompt describing user-initiated TTS changes."""
-        current_voice = self._current_tts_voice()
-        if current_voice is None:
+        voice = consume_tts_voice_change(
+            self.account_name, self.character_config.conf_uid
+        )
+        if voice not in QWEN_TTS_VOICE_LABELS:
             return ""
-        if (
-            not self._tts_preference_change_pending
-            or self._ai_known_tts_voice is None
-        ):
-            return ""
-
-        previous_voice = self._ai_known_tts_voice
-        prompt_lines = []
-        if current_voice != previous_voice:
-            prompt_lines.append(
-                prompt_builder.load_runtime_prompt(
-                    "tts_voice_changed",
-                    voice_name=QWEN_TTS_VOICE_LABELS[current_voice],
-                )
-            )
-        self._ai_known_tts_voice = current_voice
-        self._tts_preference_change_pending = False
-        return prompt_builder.join_prompt_lines(prompt_lines)
+        return prompt_builder.load_runtime_prompt(
+            "tts_voice_changed", voice_name=QWEN_TTS_VOICE_LABELS[voice]
+        )
 
     def set_max_history_turns(self, max_history_turns: int) -> None:
         """Update the per-client LLM history window without deleting memory."""
@@ -704,6 +838,8 @@ class ServiceContext:
                 tool_executor=self.tool_executor,
                 mcp_prompt_string=self.mcp_prompt,
             )
+            if hasattr(self.agent_engine, "mobile_image_only"):
+                self.agent_engine.mobile_image_only = self.mobile_image_only
             set_grok_enabled = getattr(self.agent_engine, "set_grok_enabled", None)
             if callable(set_grok_enabled):
                 set_grok_enabled(self.grok_enabled)
@@ -767,6 +903,9 @@ class ServiceContext:
         """
         default_prompt = self._render_default_system_prompt()
         default_editable, default_fixed = self._split_editable_and_fixed(default_prompt)
+        default_editable = prompt_builder.strip_relationship_guidance(
+            default_editable
+        )
 
         override = self._read_override()
         if override is not None and override.strip():
@@ -774,13 +913,19 @@ class ServiceContext:
             # of the fixed output rules. Keep only their persona section; the
             # current canonical rules are always appended below.
             editable, _legacy_fixed = self._split_editable_and_fixed(override)
+            editable = prompt_builder.strip_relationship_guidance(editable)
         else:
             editable = default_editable
 
-        if default_fixed:
-            full = f"{editable}\n\n{default_fixed}"
-        else:
-            full = editable
+        guidance = ""
+        if not is_profiler_character(self.character_config.conf_uid):
+            score = self.current_relationship_score_manager.read_score(
+                self.character_config.conf_uid
+            )
+            guidance = prompt_builder.build_current_relationship_guidance(score)
+        full = prompt_builder.join_prompt_sections(
+            (editable, guidance, default_fixed)
+        )
         return editable, default_fixed, full
 
     def get_editable_system_prompt(self) -> str:
@@ -802,6 +947,7 @@ class ServiceContext:
         account, conf_uid = self._resolve_account_and_conf_uid()
 
         editable, _fixed = self._split_editable_and_fixed(content)
+        editable = prompt_builder.strip_relationship_guidance(editable)
         write_system_prompt_override(account, conf_uid, editable)
 
         _editable, fixed, full = self._compose_effective_system_prompt()

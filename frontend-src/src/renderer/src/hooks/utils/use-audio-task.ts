@@ -11,6 +11,8 @@ import { audioManager } from '@/utils/audio-manager';
 import { toaster } from '@/components/ui/toaster';
 import { useWebSocket } from '@/context/websocket-context';
 import { DisplayText } from '@/services/websocket-service';
+import { createProfilerAudioTimeline } from '@/components/profiler/audio-timeline';
+import type { SpeechSegment } from '@/components/profiler/audio-timeline';
 import { optionalExpressionFeature } from '@/services/optional-expression-feature';
 import { optionalFeature } from '@optional-feature';
 import { useLive2DExpression } from '@/hooks/canvas/use-live2d-expression';
@@ -26,6 +28,7 @@ interface AudioTaskOptions {
   displayText?: DisplayText | null
   expressions?: string[] | number[] | null
   emotion?: string | null
+  speechSegments?: SpeechSegment[]
 }
 
 /**
@@ -82,7 +85,7 @@ export const useAudioTask = () => {
     }
 
     const {
-      audioBase64, displayText, expressions, emotion,
+      audioBase64, displayText, expressions, emotion, speechSegments = [],
     } = options;
 
     // Keep the optional character emotion on the same queued task as the text
@@ -105,21 +108,10 @@ export const useAudioTask = () => {
 
         // Get Live2D manager and model
         const live2dManager = (window as any).getLive2DManager?.();
-        if (!live2dManager) {
-          console.error('Live2D manager not found');
-          resolve();
-          return;
-        }
+        const model = live2dManager?.getModel?.(0) || null;
+        if (!model) console.warn('Live2D model unavailable; playing audio without lip sync');
 
-        const model = live2dManager.getModel(0);
-        if (!model) {
-          console.error('Live2D model not found at index 0');
-          resolve();
-          return;
-        }
-        console.log('Found model for audio playback');
-
-        if (!model._wavFileHandler) {
+        if (!model?._wavFileHandler) {
           console.warn('Model does not have _wavFileHandler for lip sync');
         } else {
           console.log('Model has _wavFileHandler available');
@@ -136,7 +128,7 @@ export const useAudioTask = () => {
         }
 
         // Start talk motion
-        if (LAppDefine && LAppDefine.PriorityNormal) {
+        if (model && LAppDefine && LAppDefine.PriorityNormal) {
           console.log("Starting random 'Talk' motion");
           model.startRandomMotion(
             "Talk",
@@ -153,19 +145,27 @@ export const useAudioTask = () => {
         audioManager.setCurrentAudio(audio, model);
         let isFinished = false;
         let playbackStarted = false;
+        const profilerTimeline = speechSegments.length
+          ? createProfilerAudioTimeline(speechSegments, updateSubtitle)
+          : null;
 
         const cleanup = (reason: 'ended' | 'interrupted' | 'error') => {
           if (playbackStarted) {
-            const duration = Number(audio.duration);
-            const currentTime = Number(audio.currentTime);
-            const playbackRatio = Number.isFinite(duration) && duration > 0
-              ? Math.max(0, Math.min(1, currentTime / duration))
-              : reason === 'ended' ? 1 : 0;
-            optionalFeature.onAssistantAudioEnd({
-              text: displayText?.text || '',
-              interrupted: reason === 'interrupted',
-              playbackRatio,
-            });
+            const currentTimeMs = Math.max(0, Number(audio.currentTime) * 1000);
+            if (profilerTimeline?.hasSegments) {
+              profilerTimeline.finish(reason !== 'ended', currentTimeMs);
+            } else {
+              const duration = Number(audio.duration);
+              const currentTime = Number(audio.currentTime);
+              const playbackRatio = Number.isFinite(duration) && duration > 0
+                ? Math.max(0, Math.min(1, currentTime / duration))
+                : reason === 'ended' ? 1 : 0;
+              optionalFeature.onAssistantAudioEnd({
+                text: displayText?.text || '',
+                interrupted: reason === 'interrupted',
+                playbackRatio,
+              });
+            }
             playbackStarted = false;
           }
           audioManager.clearCurrentAudio(audio);
@@ -180,7 +180,10 @@ export const useAudioTask = () => {
 
         audio.addEventListener('canplaythrough', () => {
           // Check for interruption before playback
-          if (stateRef.current.aiState === 'interrupted' || !audioManager.hasCurrentAudio()) {
+          if (
+            stateRef.current.aiState === 'interrupted'
+            || !audioManager.isCurrentAudio(audio)
+          ) {
             console.warn('Audio playback cancelled due to interruption or audio was stopped');
             cleanup('interrupted');
             return;
@@ -193,7 +196,7 @@ export const useAudioTask = () => {
           });
 
           // Setup lip sync
-          if (model._wavFileHandler) {
+          if (model?._wavFileHandler) {
             if (!model._wavFileHandler._initialized) {
               console.log('Applying enhanced lip sync');
               model._wavFileHandler._initialized = true;
@@ -207,18 +210,26 @@ export const useAudioTask = () => {
               };
             }
 
-            if (audioManager.hasCurrentAudio()) {
+            if (audioManager.isCurrentAudio(audio)) {
               model._wavFileHandler.start(audioDataUrl);
             } else {
               console.warn('WavFileHandler start skipped - audio was stopped');
             }
           }
-        });
+        }, { once: true });
 
         audio.addEventListener('playing', () => {
           if (playbackStarted) return;
           playbackStarted = true;
-          optionalFeature.onAssistantAudioStart({ text: displayText?.text || '' });
+          if (profilerTimeline?.hasSegments) {
+            profilerTimeline.sync(Math.max(0, Number(audio.currentTime) * 1000));
+          } else {
+            optionalFeature.onAssistantAudioStart({ text: displayText?.text || '' });
+          }
+        });
+
+        audio.addEventListener('timeupdate', () => {
+          profilerTimeline?.sync(Math.max(0, Number(audio.currentTime) * 1000));
         });
 
         audio.addEventListener('ended', () => {
@@ -258,8 +269,10 @@ export const useAudioTask = () => {
       await audioTaskQueue.waitForCompletion();
       if (isMounted && backendSynthComplete) {
         stopCurrentAudioAndLipSync();
-        sendMessage({ type: "frontend-playback-complete" });
-        setBackendSynthComplete(false);
+        sendMessage({
+          type: "frontend-playback-complete", request_id: backendSynthComplete,
+        });
+        setBackendSynthComplete(null);
       }
     };
 

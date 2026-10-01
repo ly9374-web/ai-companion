@@ -15,9 +15,8 @@ from ..optional_features import (
     process_optional_text_input,
 )
 from ..profiler_session import (
-    PROFILER_FORMAL_ROUNDS,
-    completed_profiler_rounds,
     is_profiler_character,
+    profiler_session_is_solved,
 )
 from .single_conversation import process_single_conversation
 from .conversation_utils import EMOJI_LIST
@@ -98,12 +97,12 @@ async def handle_conversation_trigger(
                 context.history_uid,
                 context.history_root,
             )
-            if completed_profiler_rounds(history) >= PROFILER_FORMAL_ROUNDS:
+            if profiler_session_is_solved(history):
                 await websocket.send_text(
                     json.dumps(
                         {
                             "type": "error",
-                            "message": "本次12轮侧写已经完成，请查看生成的侧写报告或新建会话。",
+                            "message": "本次危机已经解决，请查看生成的侧写报告或新建会话。",
                         },
                         ensure_ascii=False,
                     )

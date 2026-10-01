@@ -9,7 +9,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 import chromadb
 import jieba
@@ -118,6 +118,13 @@ class MemoryRagStore:
             )
         return self._collection
 
+    def warm_up(self) -> None:
+        """Load the embedding model and Chroma collection ahead of the first
+        retrieval so a live turn does not pay the one-time setup cost."""
+        with self._lock:
+            self._embed(["warm up"])
+            self._get_collection()
+
     @staticmethod
     def _metadata(conf_uid: str, memory: RagMemory) -> dict[str, object]:
         fingerprint_source = json.dumps(
@@ -203,6 +210,7 @@ class MemoryRagStore:
         top_k: int,
         threshold: float,
         hybrid_weight: float,
+        type_weights: Mapping[str, float] | None = None,
     ) -> list[RagMemory]:
         results = self.retrieve_many(
             conf_uid,
@@ -211,6 +219,7 @@ class MemoryRagStore:
             top_k=top_k,
             threshold=threshold,
             hybrid_weight=hybrid_weight,
+            type_weights=type_weights,
         )
         return results[0] if results else []
 
@@ -223,6 +232,7 @@ class MemoryRagStore:
         top_k: int,
         threshold: float,
         hybrid_weight: float,
+        type_weights: Mapping[str, float] | None = None,
     ) -> list[list[RagMemory]]:
         query_list = [query for query in queries]
         normalized = list(memories)
@@ -252,6 +262,12 @@ class MemoryRagStore:
                     for index in np.argsort(bm25_scores)[::-1]
                     if bm25_scores[index] > 0
                 ]
+                if type_weights is not None:
+                    ranked_indices.sort(
+                        key=lambda index: bm25_scores[index]
+                        * type_weights.get(normalized[index].type, 1.0),
+                        reverse=True,
+                    )
                 results.append(
                     [normalized[index] for index in ranked_indices[:top_k]]
                 )
@@ -321,6 +337,12 @@ class MemoryRagStore:
 
             if alpha == 1.0:
                 ranked_ids = vector_ids
+                if type_weights is not None:
+                    ranked_ids.sort(
+                        key=lambda memory_id: similarity_by_id[memory_id]
+                        * type_weights.get(by_id[memory_id].type, 1.0),
+                        reverse=True,
+                    )
             else:
                 scores: dict[str, float] = {}
                 for rank, memory_id in enumerate(vector_ids, start=1):
@@ -329,7 +351,15 @@ class MemoryRagStore:
                     scores[memory_id] = scores.get(memory_id, 0.0) + (
                         (1.0 - alpha) / (RRF_K + rank)
                     )
-                ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)
+                if type_weights is None:
+                    ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)
+                else:
+                    ranked_ids = sorted(
+                        scores,
+                        key=lambda memory_id: scores[memory_id]
+                        * type_weights.get(by_id[memory_id].type, 1.0),
+                        reverse=True,
+                    )
 
             all_results.append(
                 [by_id[memory_id] for memory_id in ranked_ids[:top_k]]

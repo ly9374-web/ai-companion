@@ -25,6 +25,14 @@ from .memory_rag import RagMemory, memory_rag_store
 SUMMARY_INTERVAL = 6
 MAX_LONG_TERM_MEMORIES: int | None = None
 LONG_TERM_MEMORY_METADATA_KEY = "long_term_memory"
+RECALL_TYPE_WEIGHTS = {
+    "用户的信息": 1.10,
+    "用户的偏好": 1.05,
+    "聊过的话题": 0.95,
+    "互相的承诺": 1.10,
+    "用户的经历": 0.95,
+    "你的设定": 1.10,
+}
 
 
 @dataclass(frozen=True)
@@ -538,6 +546,7 @@ class LongTermMemoryManager:
         top_k: int = 5,
         threshold: float = 0.5,
         hybrid_weight: float = 0.5,
+        retrieved_contents: list[str] | None = None,
     ) -> str:
         """Retrieve content for this request without adding it to chat history."""
         if not conf_uid or not query.strip():
@@ -554,10 +563,13 @@ class LongTermMemoryManager:
                 top_k=max(1, min(20, int(top_k))),
                 threshold=max(0.0, min(1.0, float(threshold))),
                 hybrid_weight=max(0.0, min(1.0, float(hybrid_weight))),
+                type_weights=RECALL_TYPE_WEIGHTS,
             )
         except Exception as exc:
             logger.error("Long-term memory retrieval failed: {}", exc)
             return ""
+        if retrieved_contents is not None:
+            retrieved_contents.extend(memory.content for memory in retrieved)
         return prompt_builder.build_memory_injection(
             memory.content for memory in retrieved
         )

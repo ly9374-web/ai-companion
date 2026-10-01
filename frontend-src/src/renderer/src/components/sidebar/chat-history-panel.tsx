@@ -21,6 +21,67 @@ import { useTranslation } from 'react-i18next';
 import { OptionalChatHistoryExtras } from '@optional-feature';
 
 // Main component
+
+// Classify a tool-result URL by extension for media rendering
+const getMediaType = (url: string): 'image' | 'audio' | 'video' | 'link' => {
+  const path = url.split('?')[0].toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|bmp)$/.test(path)) return 'image';
+  if (/\.(mp3|wav|m4a|flac|aac|ogg)$/.test(path)) return 'audio';
+  if (/\.(mp4|mov|webm|avi)$/.test(path)) return 'video';
+  return 'link';
+};
+
+// Render a clickable media card for a tool-generated file URL
+const renderToolMedia = (url: string, key: string) => {
+  switch (getMediaType(url)) {
+    case 'image':
+      return (
+        <img
+          key={key}
+          src={url}
+          alt="tool generated image"
+          style={{
+            maxHeight: '200px',
+            maxWidth: '240px',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            display: 'block',
+          }}
+          onClick={() => window.open(url, '_blank')}
+        />
+      );
+    case 'audio':
+      return (
+        <Box key={key} width="100%" maxWidth="320px">
+          <audio controls src={url} style={{ width: '100%' }} />
+        </Box>
+      );
+    case 'video':
+      return (
+        <video
+          key={key}
+          controls
+          preload="metadata"
+          src={url}
+          style={{ maxWidth: '280px', borderRadius: '8px', display: 'block' }}
+        />
+      );
+    default:
+      return (
+        <Text key={key} fontSize="xs" isTruncated>
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: '#63B3ED' }}
+          >
+            {url}
+          </a>
+        </Text>
+      );
+  }
+};
+
 function ChatHistoryPanel(): JSX.Element {
   const { t } = useTranslation();
   const { messages } = useChatHistory(); // Get messages directly from context
@@ -60,45 +121,63 @@ function ChatHistoryPanel(): JSX.Element {
                 {validMessages.map((msg) => {
                 // Check if it's a tool call message
                 if (msg.type === 'tool_call_status') {
+                  const mediaUrls = msg.status === 'completed' && msg.media_urls?.length
+                    ? msg.media_urls
+                    : [];
                   return (
                     // Render Tool Call Indicator using msg properties
                     <Flex
                       key={msg.id} // Use tool_id as key
                       {...sidebarStyles.toolCallIndicator.container}
-                      alignItems="center"
+                      direction="column"
+                      alignItems="flex-start"
+                      justifyContent="flex-start"
                     >
-                      <Icon
-                        as={FaTools}
-                        {...sidebarStyles.toolCallIndicator.icon}
-                      />
-                      <Text {...sidebarStyles.toolCallIndicator.text}>
-                        {/* {msg.tool_name}: {msg.status === 'running' ? 'Running...' : msg.content} */}
-                        {msg.status === "running" ? `${msg.name} is using tool ${msg.tool_name}` : `${msg.name} used tool ${msg.tool_name}`}
-                      </Text>
-                      {/* Show spinner if running, checkmark if completed, maybe error icon? */}
-                      {msg.status === "running" && (
-                        <Spinner
-                          size="xs"
-                          color={sidebarStyles.toolCallIndicator.spinner.color}
-                          ml={sidebarStyles.toolCallIndicator.spinner.ml}
-                        />
-                      )}
-                      {msg.status === "completed" && (
+                      <Flex alignItems="center" gap={2}>
                         <Icon
-                          as={FaCheck}
-                          {...sidebarStyles.toolCallIndicator.completedIcon}
+                          as={FaTools}
+                          {...sidebarStyles.toolCallIndicator.icon}
                         />
-                      )}
-                      {/* Optional: Add an error icon */}
-                      {msg.status === "error" && (
-                        <Icon
-                          as={FaTimes}
-                          {...sidebarStyles.toolCallIndicator.errorIcon}
-                        />
+                        <Text {...sidebarStyles.toolCallIndicator.text}>
+                          {/* {msg.tool_name}: {msg.status === 'running' ? 'Running...' : msg.content} */}
+                          {msg.status === "running" ? `${msg.name} is using tool ${msg.tool_name}` : `${msg.name} used tool ${msg.tool_name}`}
+                        </Text>
+                        {/* Show spinner if running, checkmark if completed, maybe error icon? */}
+                        {msg.status === "running" && (
+                          <Spinner
+                            size="xs"
+                            color={sidebarStyles.toolCallIndicator.spinner.color}
+                            ml={sidebarStyles.toolCallIndicator.spinner.ml}
+                          />
+                        )}
+                        {msg.status === "completed" && (
+                          <Icon
+                            as={FaCheck}
+                            {...sidebarStyles.toolCallIndicator.completedIcon}
+                          />
+                        )}
+                        {/* Optional: Add an error icon */}
+                        {msg.status === "error" && (
+                          <Icon
+                            as={FaTimes}
+                            {...sidebarStyles.toolCallIndicator.errorIcon}
+                          />
+                        )}
+                      </Flex>
+                      {mediaUrls.length > 0 && (
+                        <Flex
+                          direction="column"
+                          gap={2}
+                          mt={1}
+                          width="100%"
+                          pl="22px"
+                        >
+                          {mediaUrls.map((url, idx) => renderToolMedia(url, `${msg.id}-media-${idx}`))}
+                        </Flex>
                       )}
                     </Flex>
                   );
-                } 
+                }
                 // Render Standard Chat Message (human or ai text)
                 return (
                   <ChatMessage

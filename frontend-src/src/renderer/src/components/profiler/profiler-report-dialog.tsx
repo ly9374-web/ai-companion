@@ -13,6 +13,7 @@ import {
 interface ProfilerReport {
   content: string;
   path: string;
+  round?: number | null;
 }
 
 export function ProfilerReportDialog(): JSX.Element {
@@ -25,6 +26,7 @@ export function ProfilerReportDialog(): JSX.Element {
       setReport({
         content: typeof detail.content === 'string' ? detail.content : '',
         path: typeof detail.path === 'string' ? detail.path : '',
+        round: typeof detail.round === 'number' ? detail.round : null,
       });
       setOpen(true);
     };
@@ -36,7 +38,11 @@ export function ProfilerReportDialog(): JSX.Element {
     <DialogRoot open={open} onOpenChange={(details) => setOpen(details.open)} size="xl">
       <DialogContent maxW="min(920px, calc(100vw - 32px))" maxH="calc(100vh - 48px)">
         <DialogHeader>
-          <DialogTitle>薄片心理侧写报告</DialogTitle>
+          <DialogTitle>
+            {typeof report.round === 'number'
+              ? `薄片心理侧写报告（第${report.round}轮中期）`
+              : '薄片心理侧写报告'}
+          </DialogTitle>
         </DialogHeader>
         <DialogBody overflowY="auto">
           <Box

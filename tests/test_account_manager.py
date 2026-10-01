@@ -48,13 +48,12 @@ class AccountManagerTests(unittest.TestCase):
                 "",
             )
             self.assertEqual(
-                json.loads(
-                    (role_dir / "long_term_relationship.md").read_text(
-                        encoding="utf-8"
-                    )
-                ),
-                {"long_term_relationship": "暂无"},
+                (role_dir / "current_relationship_score.md").read_text(
+                    encoding="utf-8"
+                ).strip(),
+                "3",
             )
+            self.assertFalse((role_dir / "long_term_relationship.md").exists())
             short_relationship = json.loads(
                 (role_dir / "short_term_relationship.md").read_text(
                     encoding="utf-8"
